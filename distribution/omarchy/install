@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Install the verified Omarchy release from a clone.
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+if [[ -f "$script_dir/bundle.json" ]]; then
+    exec python3 -B "$script_dir/install.py" "$@"
+fi
+
+usage() {
+    printf '%s\n' 'Usage: bash ./install [--archive PATH]'
+    printf '%s\n' 'Run as the desktop user in an Omarchy terminal.'
+}
+
+local_archive=
+case $# in
+    0) ;;
+    1)
+        if [[ $1 == --help || $1 == -h ]]; then
+            usage
+            exit 0
+        fi
+        usage >&2
+        exit 2
+        ;;
+    2)
+        if [[ $1 != --archive || ! -f $2 ]]; then
+            printf '%s\n' 'Provide an existing release archive with --archive PATH.' >&2
+            exit 2
+        fi
+        local_archive=$2
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
+
+if [[ $EUID == 0 || $(uname -sm) != 'Linux x86_64' ]]; then
+    printf '%s\n' 'Run as the desktop user on Linux x86_64.' >&2
+    exit 1
+fi
+if ! command -v omarchy >/dev/null || ! command -v omarchy-shell >/dev/null; then
+    printf '%s\n' 'Open a terminal in the Omarchy desktop and try again.' >&2
+    exit 1
+fi
+
+release=anolisa-omarchy-0.1.0
+archive=$release.tar.gz
+url=https://github.com/MasterYaso/ANOLISA/releases/download/omarchy-v0.1.0/$archive
+
+work_dir=$(mktemp -d)
+trap 'rm -rf -- "$work_dir"' EXIT
+if [[ -n $local_archive ]]; then
+    cp -- "$local_archive" "$work_dir/$archive"
+else
+    if ! curl --fail --location --silent --show-error --retry 2 \
+        --proto '=https' --proto-redir '=https' \
+        --connect-timeout 15 --max-time 600 --output "$work_dir/$archive" "$url"; then
+        printf '%s\n' 'Could not download the release archive. Check the GitHub Release or use --archive PATH.' >&2
+        exit 1
+    fi
+fi
+
+cd -- "$work_dir"
+sha256sum --check --strict "$script_dir/SHA256SUMS"
+tar -xzf "$archive"
+cd -- "$release"
+./install

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "community.anolisa",
+  "name": "ANOLISA - AI 助手",
+  "version": "0.1.4",
+  "author": "ANOLISA contributors",
+  "license": "Apache-2.0 AND MIT",
+  "description": "Open a working terminal and Qoder; inspect safety checks and token savings.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "Widget.qml"},
+  "barWidget": {
+    "displayName": "ANOLISA - AI 助手",
+    "category": "AI",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": {},
+    "schema": []
+  }
+}
