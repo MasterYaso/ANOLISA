@@ -199,6 +199,27 @@ def test_agent_does_not_start_when_security_service_is_inactive(
     assert not launched
 
 
+def test_cosh_owns_missing_commands_without_changing_parent_environment(
+    paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture
+) -> None:
+    runtime = load("runtime")
+    binary = paths["prefix"] / "bin/cosh"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$MISE_NOT_FOUND_AUTO_INSTALL" '
+        '"${QODER_PERSONAL_ACCESS_TOKEN-unset}" "$1"\n'
+    )
+    binary.chmod(0o755)
+    monkeypatch.setenv("MISE_NOT_FOUND_AUTO_INSTALL", "1")
+    monkeypatch.setenv(runtime.agents.PAT, "private-test-fixture")
+
+    assert runtime.run_cosh(paths, ["--fixture"]) == 0
+    assert capfd.readouterr().out.splitlines()[-3:] == ["0", "unset", "--fixture"]
+    assert runtime.environment(paths)["MISE_NOT_FOUND_AUTO_INSTALL"] == "1"
+    assert runtime.os.environ[runtime.agents.PAT] == "private-test-fixture"
+
+
 def test_manifest_entrypoints_and_actions_exist() -> None:
     manifest = json.loads((ROOT / "plugin/manifest.json").read_text())
     assert manifest["id"] == "community.anolisa"

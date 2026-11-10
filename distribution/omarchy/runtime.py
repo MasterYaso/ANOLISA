@@ -692,6 +692,8 @@ def run_cosh(paths: dict[str, Path], arguments: list[str]) -> int:
     print("单独输入 /agent 回车，再在 ◆ 后写问题并回车。Esc 返回 shell，exit 退出。", flush=True)
     env = environment(paths)
     env.pop(agents.PAT, None)
+    # Mise's missing-command handler takes precedence over cosh's natural-language routing.
+    env["MISE_NOT_FOUND_AUTO_INSTALL"] = "0"
     return subprocess.call([str(paths["prefix"] / "bin/cosh"), *arguments], env=env)
 
 
