@@ -24,15 +24,15 @@ identifies the component checkout; review local integration changes separately
 until they have been committed. This is an experimental integration package,
 not a new official ANOLISA component release.
 
-For the 0.1.0 package, reuse the verified demo.2 archive with `--reuse-demo2 ARCHIVE`
+For the 0.1.1 package, reuse the verified demo.2 archive with `--reuse-demo2 ARCHIVE`
 in place of `--bin-dir`. The assembler checks each reused program and sources
 Qoder CLI 1.1.84 separately. Pass `--cache` to reuse the verified Qoder archive.
 `bundle.json` records
 the original binary provenance, the assembly environment, and per-file
 integration source digests.
 
-The checkout installer expects the verified `anolisa-omarchy-0.1.0.tar.gz`
-asset under the `omarchy-v0.1.0` GitHub Release. Its pinned SHA-256 is in
+The checkout installer expects the verified `anolisa-omarchy-0.1.1.tar.gz`
+asset under the `omarchy-v0.1.1` GitHub Release. Its pinned SHA-256 is in
 `distribution/omarchy/SHA256SUMS`. If rebuilding the release, verify the new
 archive on Omarchy and update the pin before publishing that archive.
 

@@ -6,7 +6,7 @@ A native Omarchy bar dropdown that opens cosh and an AW-managed Qoder session.
 Security and Tokenless details come from the components' public CLI interfaces.
 This integration does not replace Omarchy's desktop or terminal emulator.
 
-## Install 0.1.0
+## Install 0.1.1
 
 Open a terminal as the logged-in desktop user on Omarchy x86_64. From the clone:
 
@@ -15,9 +15,9 @@ cd distribution/omarchy
 bash ./install
 ```
 
-The script downloads the `omarchy-v0.1.0` GitHub Release asset, checks it against
+The script downloads the `omarchy-v0.1.1` GitHub Release asset, checks it against
 `SHA256SUMS` from this directory and runs the installer. If you already have the
-archive, pass `--archive /path/to/anolisa-omarchy-0.1.0.tar.gz` to the same script.
+archive, pass `--archive /path/to/anolisa-omarchy-0.1.1.tar.gz` to the same script.
 
 As the logged-in Omarchy desktop user, extract the candidate and run `./install`.
 It installs the bundled programs into a private user prefix, enables the native

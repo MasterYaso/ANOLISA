@@ -45,9 +45,9 @@ if ! command -v omarchy >/dev/null || ! command -v omarchy-shell >/dev/null; the
     exit 1
 fi
 
-release=anolisa-omarchy-0.1.0
+release=anolisa-omarchy-0.1.1
 archive=$release.tar.gz
-url=https://github.com/MasterYaso/ANOLISA/releases/download/omarchy-v0.1.0/$archive
+url=https://github.com/MasterYaso/ANOLISA/releases/download/omarchy-v0.1.1/$archive
 
 work_dir=$(mktemp -d)
 trap 'rm -rf -- "$work_dir"' EXIT

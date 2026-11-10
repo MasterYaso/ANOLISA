@@ -5,7 +5,7 @@
 Omarchy 原生顶栏下拉窗，提供 cosh 工作终端和受 AW 管理的 Qoder 入口。
 安全检查与词元看板读取组件的公共命令接口，不另造统计数据库。
 
-## 安装 0.1.0
+## 安装 0.1.1
 
 在 Omarchy x86_64 桌面打开终端，用当前桌面用户在克隆的仓库根目录运行。
 
@@ -14,9 +14,9 @@ cd distribution/omarchy
 bash ./install
 ```
 
-脚本从 GitHub Release 的 `omarchy-v0.1.0` 下载归档，按本目录的 `SHA256SUMS`
+脚本从 GitHub Release 的 `omarchy-v0.1.1` 下载归档，按本目录的 `SHA256SUMS`
 校验后运行安装器。手里已有安装包时，可以给同一个脚本加上
-`--archive /path/to/anolisa-omarchy-0.1.0.tar.gz`。
+`--archive /path/to/anolisa-omarchy-0.1.1.tar.gz`。
 
 用当前登录桌面的普通用户解压候选包，执行 `./install`。
 安装器部署随包程序、启用原生顶栏插件，并通过一次 sudo 安装系统级安全服务。

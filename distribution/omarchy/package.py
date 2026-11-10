@@ -13,7 +13,7 @@ from pathlib import Path
 
 import agent_installation as agents
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DEMO2_SHA256 = "3c340d0ef76fd218f4e5fd689db83d3181a63e506bc9a9c9b238cfb756a5f022"
 MODULES = ("runtime.py", "setup.py", "agent_installation.py", "system_install.py")
 
