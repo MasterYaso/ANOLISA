@@ -52,9 +52,11 @@ url=https://github.com/MasterYaso/ANOLISA/releases/download/omarchy-v0.1.1/$arch
 work_dir=$(mktemp -d)
 trap 'rm -rf -- "$work_dir"' EXIT
 if [[ -n $local_archive ]]; then
+    printf '%s\n' '[1/4] Using local installation package...'
     cp -- "$local_archive" "$work_dir/$archive"
 else
-    if ! curl --fail --location --silent --show-error --retry 2 \
+    printf '[1/4] Downloading %s. Progress is shown below.\n' "$archive"
+    if ! curl --fail --location --progress-bar --show-error --retry 2 \
         --proto '=https' --proto-redir '=https' \
         --connect-timeout 15 --max-time 600 --output "$work_dir/$archive" "$url"; then
         printf '%s\n' 'Could not download the release archive. Check the GitHub Release or use --archive PATH.' >&2
@@ -63,7 +65,10 @@ else
 fi
 
 cd -- "$work_dir"
+printf '%s\n' '[2/4] Verifying installation package...'
 sha256sum --check --strict "$script_dir/SHA256SUMS"
+printf '%s\n' '[3/4] Extracting installation package...'
 tar -xzf "$archive"
 cd -- "$release"
+printf '%s\n' '[4/4] Installing ANOLISA Omarchy...'
 ./install
