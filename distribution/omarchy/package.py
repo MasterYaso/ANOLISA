@@ -11,11 +11,10 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-import agent_installation as agents
-
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 DEMO2_SHA256 = "3c340d0ef76fd218f4e5fd689db83d3181a63e506bc9a9c9b238cfb756a5f022"
-MODULES = ("runtime.py", "setup.py", "agent_installation.py", "system_install.py")
+PREBUILT_SHA256 = "66f13d888efb98e7f5e7456653178ccc6d8c61d27d12b3b4102683f4df20301c"
+MODULES = ("runtime.py", "setup.py", "agent_installation.py", "system_install.py", "i18n.py")
 
 
 def digest(filename: Path) -> str:
@@ -37,9 +36,13 @@ def archive_permissions(info: tarfile.TarInfo) -> tarfile.TarInfo:
 
 def reuse_payload(archive: Path, payload: Path) -> dict:
     checksum = digest(archive)
-    if checksum != DEMO2_SHA256:
-        raise ValueError("The demo.2 archive does not match the validated baseline")
-    base = "anolisa-omarchy-0.1.0-demo.2"
+    baselines = {
+        DEMO2_SHA256: "anolisa-omarchy-0.1.0-demo.2",
+        PREBUILT_SHA256: "anolisa-omarchy-0.1.1",
+    }
+    if checksum not in baselines:
+        raise ValueError("The archive does not match a validated prebuilt baseline")
+    base = baselines[checksum]
     prefix = base + "/payload/"
     with tarfile.open(archive) as tar:
         metadata = json.load(tar.extractfile(f"{base}/bundle.json"))
@@ -62,7 +65,7 @@ def reuse_payload(archive: Path, payload: Path) -> dict:
                 raise ValueError(f"Reused payload digest mismatch: {relative}")
             target.chmod(entry.mode)
     return {
-        "kind": "verified_demo2_archive",
+        "kind": "verified_prebuilt_archive",
         "archive_sha256": checksum,
         "component_commit": metadata["source_commit"],
         "original_build": "Ubuntu 24.04 on WSL, Linux x86_64, Rust 1.97.1",
@@ -74,6 +77,7 @@ def main() -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--bin-dir", type=Path)
     source.add_argument("--reuse-demo2", type=Path)
+    source.add_argument("--reuse-bundle", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path)
     options = parser.parse_args()
@@ -87,11 +91,9 @@ def main() -> None:
     stage.mkdir()
     payload = stage / "payload"
     payload.mkdir()
-    if options.reuse_demo2:
-        provenance = reuse_payload(options.reuse_demo2, payload)
+    if options.reuse_demo2 or options.reuse_bundle:
+        provenance = reuse_payload(options.reuse_demo2 or options.reuse_bundle, payload)
     else:
-        if options.cache is None:
-            parser.error("--bin-dir requires --cache")
         binaries = options.bin_dir.resolve()
         env = dict(os.environ, BIN_DIR=str(binaries), DESTDIR=str(payload))
         subprocess.run(
@@ -112,12 +114,12 @@ def main() -> None:
             shutil.copy2(binaries / name, bindir / name)
             (bindir / name).chmod(0o755)
         provenance = {"kind": "provided_linux_build_outputs"}
-    agents.stage_qoder(options.cache or output / "downloads", payload / "bin/qodercli")
     shutil.copytree(
         here / "plugin", payload / "plugin", ignore=shutil.ignore_patterns("__pycache__")
     )
     for name in MODULES:
         shutil.copy2(here / name, payload)
+    shutil.copy2(here / "translations.json", payload)
     for name in (
         "install",
         "install.py",
@@ -136,7 +138,7 @@ def main() -> None:
     licenses = payload / "share/licenses/anolisa-omarchy"
     licenses.mkdir(parents=True, exist_ok=True)
     shutil.copy2(repo / "LICENSE", licenses / "ANOLISA-APACHE-2.0")
-    if not options.reuse_demo2:
+    if not (options.reuse_demo2 or options.reuse_bundle):
         shutil.copy2(repo / "src/tokenless/third_party/rtk/LICENSE", licenses / "RTK-MIT")
     commit = subprocess.check_output(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
@@ -166,10 +168,10 @@ def main() -> None:
             "sec-core": "1.1.2",
             "tokenless": "0.9.2",
             "aw": "0.1.0",
-            "qodercli": agents.VERSION,
         },
-        "downloads": [{"name": "Qoder CLI", "url": agents.URL, "sha256": agents.ARCHIVE_SHA256}],
-        "notice": "Experimental integration; Qoder remains subject to its own terms.",
+        "optional_components": {"qodercli": "Downloaded by the user from Qoder's official source"},
+        "downloads": [],
+        "notice": "Qoder CLI is not included. Install it during account setup if needed.",
     }
     (stage / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
     archive = output / f"{stage.name}.tar.gz"

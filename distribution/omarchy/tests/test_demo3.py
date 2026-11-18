@@ -57,7 +57,7 @@ def test_defer_lock_and_retry(paths: dict[str, Path]) -> None:
     runtime = load("runtime")
     with runtime.setup.lock(paths["run"]):
         assert runtime.setup.running(paths["run"])
-        with pytest.raises(ValueError, match="已有设置"):
+        with pytest.raises(ValueError, match="already running"):
             runtime.wizard(paths, None, defer=True)
     runtime.wizard(paths, None, defer=True)
     assert not runtime.setup.running(paths["run"])

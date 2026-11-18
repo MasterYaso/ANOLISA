@@ -14,6 +14,8 @@ Rectangle {
     readonly property var setupState: report.setup || ({})
     readonly property var coshState: report.cosh || ({})
     readonly property var qoderState: report.qoder || ({})
+    readonly property string language: (report.ui || ({})).language || "en-US"
+    signal languageRequested(string language)
     signal actionRequested(string action)
     signal navigateRequested(string page)
     signal closeRequested()
@@ -25,6 +27,12 @@ Rectangle {
     border.color: "#3a4145"
     border.width: 1
 
+    // The backend supplies the selected user's catalog; system locale is not used.
+    function tr(message) {
+        var strings = (report.ui || ({})).strings || ({})
+        return language === "zh-CN" && strings[message] !== undefined ? strings[message] : message
+    }
+
     function count(value) {
         return value.toLocaleString(Qt.locale("en_US"), "f", 0)
     }
@@ -33,19 +41,19 @@ Rectangle {
         return data.available && typeof data[field] === "number" ? count(data[field]) : "—"
     }
     function componentStatus(component) {
-        if (!report.ok) return "状态未知"
+        if (!report.ok) return panel.tr("Status unknown")
         var data = report[component] || ({})
-        if (data.state === "empty" || (data.available && data.checked === 0)) return "暂无记录"
-        return data.available ? "有记录" : "不可用"
+        if (data.state === "empty" || (data.available && data.checked === 0)) return panel.tr("No records yet")
+        return data.available ? panel.tr("Records available") : panel.tr("Unavailable")
     }
     function choiceLabel(value) {
         if (value.verification && value.verification.checked_at)
-            return (value.verification.result === "passed" ? "用户确认收到回答" : "用户报告连接失败")
+            return (value.verification.result === "passed" ? panel.tr("Response confirmed by user") : panel.tr("Connection failure reported by user"))
                 + " · " + value.verification.checked_at
-        if (value.reported_configured) return "已手动确认，连接待验证"
-        if (value.choice === "skipped") return "已跳过，可补配"
-        if (value.choice === "configure") return "已处理，连接待验证"
-        return "待设置"
+        if (value.reported_configured) return panel.tr("Manually configured; connection not verified")
+        if (value.choice === "skipped") return panel.tr("Skipped; set up later")
+        if (value.choice === "configure") return panel.tr("Configured; connection not verified")
+        return panel.tr("Not configured")
     }
 
     component Label: Text {
@@ -112,7 +120,7 @@ Rectangle {
         Label { text: "✦"; color: "#b7d9be"; font.pixelSize: 23 * panel.unit }
         Label {
             objectName: "productTitle"
-            text: "ANOLISA - AI 助手"
+            text: panel.tr("ANOLISA - AI Assistant")
             font.pixelSize: 16 * panel.unit
             font.weight: Font.DemiBold
             fontSizeMode: Text.HorizontalFit
@@ -124,7 +132,7 @@ Rectangle {
         }
         ActionButton {
             objectName: "settingsButton"
-            text: panel.page === "home" ? "⚙" : "‹ 返回"
+            text: panel.page === "home" ? "⚙" : panel.tr("‹ Back")
             textSize: panel.page === "home" ? 18 : 12
             quiet: true; unit: panel.unit; typeface: panel.typeface
             onClicked: panel.navigateRequested(panel.page === "home" ? "settings" : "home")
@@ -153,24 +161,24 @@ Rectangle {
             id: body
             width: viewport.width
             spacing: 12 * panel.unit
-            Label { visible: panel.failure !== ""; width: parent.width; text: panel.failure; color: "#efd199" }
+            Label { objectName: "failureMessage"; visible: panel.failure !== ""; width: parent.width; text: panel.tr(panel.failure); color: "#efd199" }
             Column {
                 visible: panel.page === "home" && panel.setupState.needs_prompt === true
                 width: parent.width
                 spacing: 8 * panel.unit
-                Label { width: parent.width; text: "第一次使用"; font.bold: true }
-                Label { width: parent.width; text: "cosh 和 Qoder 分别设置，两项都可以稍后完成。"; color: "#a3ada8" }
+                Label { width: parent.width; text: panel.tr("Welcome"); font.bold: true }
+                Label { width: parent.width; text: panel.tr("Set up cosh and Qoder separately. You can finish either later."); color: "#a3ada8" }
                 RowLayout {
                     width: parent.width
                     ActionButton {
                         objectName: "setupButton"
-                        text: "开始设置"; unit: panel.unit; typeface: panel.typeface
+                        text: panel.tr("Start setup"); unit: panel.unit; typeface: panel.typeface
                         enabled: !panel.setupState.running
                         onClicked: panel.actionRequested("setup")
                     }
                     ActionButton {
                         objectName: "deferButton"
-                        text: "稍后"; quiet: true; unit: panel.unit; typeface: panel.typeface
+                        text: panel.tr("Later"); quiet: true; unit: panel.unit; typeface: panel.typeface
                         enabled: !panel.setupState.running
                         onClicked: panel.actionRequested("defer")
                     }
@@ -180,7 +188,7 @@ Rectangle {
                 visible: panel.page === "home" && panel.setupState.needs_prompt !== true
                 width: parent.width
                 spacing: 12 * panel.unit
-                Label { width: parent.width; text: "开始 AI 工作，查看任务和增强效果。"; color: "#a3ada8" }
+                Label { width: parent.width; text: panel.tr("Start AI work and review enhancement results."); color: "#a3ada8" }
                 Rectangle {
                     width: parent.width
                     implicitHeight: work.implicitHeight + 28 * panel.unit
@@ -193,13 +201,13 @@ Rectangle {
                         x: 14 * panel.unit; y: 14 * panel.unit
                         width: parent.width - 28 * panel.unit
                         spacing: 9 * panel.unit
-                        Label { text: "开始工作"; color: "#a3b7a9"; font.pixelSize: 11 * panel.unit }
-                        Label { text: "打开工作终端"; font.pixelSize: 18 * panel.unit; font.weight: Font.DemiBold }
+                        Label { text: panel.tr("Start work"); color: "#a3b7a9"; font.pixelSize: 11 * panel.unit }
+                        Label { text: panel.tr("Open work terminal"); font.pixelSize: 18 * panel.unit; font.weight: Font.DemiBold }
                         Label { width: parent.width; text: "cosh · " + panel.choiceLabel(panel.coshState); color: "#a3ada8" }
                         ActionButton {
                             objectName: "coshButton"
                             width: parent.width
-                            text: "打开工作终端 →"
+                            text: panel.tr("Open work terminal →")
                             primary: true; unit: panel.unit; typeface: panel.typeface
                             onClicked: panel.actionRequested("cosh")
                         }
@@ -210,8 +218,8 @@ Rectangle {
                     width: parent.width
                     quiet: true; unit: panel.unit; typeface: panel.typeface
                     text: panel.qoderState.installation !== "compatible" || panel.qoderState.configuration === "missing"
-                        ? "设置 Qoder →" : panel.qoderState.enhancement === "unavailable"
-                        ? "检查 Qoder →" : "用 Qoder 开始任务 →"
+                        ? panel.tr("Set up Qoder →") : panel.qoderState.enhancement === "unavailable"
+                        ? panel.tr("Check Qoder →") : panel.tr("Use Qoder →")
                     onClicked: {
                         if (panel.qoderState.installation !== "compatible" || panel.qoderState.configuration === "missing")
                             panel.actionRequested("setup-qoder")
@@ -223,45 +231,65 @@ Rectangle {
                 }
                 Label {
                     width: parent.width
-                    text: "Qoder 的任务与确认在终端查看，增强效果在下方查看。"
+                    text: panel.tr("Follow Qoder tasks and confirmations in the terminal. Review enhancements below.")
                     color: "#a3ada8"; font.pixelSize: 11 * panel.unit
                 }
                 RowLayout {
                     width: parent.width
-                    Label { text: "组件与看板"; color: "#a3ada8"; font.pixelSize: 12 * panel.unit; Layout.fillWidth: true }
-                    ActionButton { text: "设置"; quiet: true; unit: panel.unit; typeface: panel.typeface; onClicked: panel.navigateRequested("settings") }
+                    Label { text: panel.tr("Components and dashboards"); color: "#a3ada8"; font.pixelSize: 12 * panel.unit; Layout.fillWidth: true }
+                    ActionButton { text: panel.tr("Settings"); quiet: true; unit: panel.unit; typeface: panel.typeface; onClicked: panel.navigateRequested("settings") }
                 }
                 Column {
                     width: parent.width
-                    ComponentRow { objectName: "securityRow"; name: "sec-core"; description: "安全检查"; symbol: "◇"; destination: "security" }
-                    ComponentRow { objectName: "tokenlessRow"; name: "Tokenless"; description: "降低词元开销"; symbol: "≋"; destination: "tokenless" }
+                    ComponentRow { objectName: "securityRow"; name: "sec-core"; description: panel.tr("Security checks"); symbol: "◇"; destination: "security" }
+                    ComponentRow { objectName: "tokenlessRow"; name: "Tokenless"; description: panel.tr("Reduce token usage"); symbol: "≋"; destination: "tokenless" }
                 }
             }
             Column {
                 visible: panel.page === "settings"
                 width: parent.width
                 spacing: 10 * panel.unit
-                Label { text: "设置"; font.pixelSize: 18 * panel.unit; font.bold: true }
+                Label { text: panel.tr("Settings"); font.pixelSize: 18 * panel.unit; font.bold: true }
+                Label { text: "Language / 语言"; font.bold: true }
+                RowLayout {
+                    width: parent.width
+                    ActionButton {
+                        objectName: "englishLanguageButton"
+                        text: "English"; primary: panel.language === "en-US"
+                        enabled: !panel.busy
+                        unit: panel.unit; typeface: panel.typeface
+                        onClicked: panel.languageRequested("en-US")
+                    }
+                    ActionButton {
+                        objectName: "chineseLanguageButton"
+                        text: "简体中文"; primary: panel.language === "zh-CN"
+                        enabled: !panel.busy
+                        unit: panel.unit; typeface: panel.typeface
+                        onClicked: panel.languageRequested("zh-CN")
+                    }
+                }
                 Label {
                     width: parent.width
                     text: "cosh · " + panel.choiceLabel(panel.coshState) + "\nQoder · "
                         + panel.choiceLabel(panel.qoderState)
                         + (panel.qoderState.version ? " · " + panel.qoderState.version : "")
                         + (panel.qoderState.choice === "configure"
-                            ? (panel.qoderState.auth_mode === "pat" ? " · 插件保存 PAT" : " · 在 Qoder CLI 中配置")
+                            ? (panel.qoderState.auth_mode === "pat" ? panel.tr(" · PAT saved by plugin") : panel.tr(" · Account managed in Qoder CLI"))
                             : "")
                     color: "#a3ada8"
                 }
                 Label {
                     width: parent.width
                     visible: panel.qoderState.enhancement === "unavailable"
-                    text: "安全检查或安装配置不可用。运行检查查看原因。"
+                    text: panel.tr("Safety checks or installation settings are unavailable. Run diagnostics for details.")
                     color: "#efd199"
                 }
-                ActionButton { objectName: "setupCoshButton"; text: "设置 cosh"; width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("setup-cosh") }
-                ActionButton { objectName: "setupQoderButton"; text: "设置 Qoder"; width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("setup-qoder") }
-                ActionButton { objectName: "doctorButton"; text: "运行检查"; width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("doctor") }
-                Label { visible: panel.setupState.running === true; width: parent.width; text: "已有设置操作，请返回原终端。"; color: "#a3ada8" }
+                ActionButton { objectName: "setupCoshButton"; text: panel.tr("Set up cosh"); width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("setup-cosh") }
+                ActionButton { objectName: "setupQoderButton"; text: panel.tr("Set up Qoder"); width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("setup-qoder") }
+                ActionButton { objectName: "qoderVersionButton"; text: panel.tr("Qoder version"); width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("qoder-install") }
+                Label { width: parent.width; visible: panel.qoderState.build_validation === "not_verified"; text: panel.tr("Latest build; plugin compatibility not verified"); color: "#efd199" }
+                ActionButton { objectName: "doctorButton"; text: panel.tr("Run diagnostics"); width: parent.width; unit: panel.unit; typeface: panel.typeface; onClicked: panel.actionRequested("doctor") }
+                Label { visible: panel.setupState.running === true; width: parent.width; text: panel.tr("Setup is already running. Return to its terminal."); color: "#a3ada8" }
             }
             Column {
                 visible: panel.page === "security" || panel.page === "tokenless"
@@ -269,7 +297,7 @@ Rectangle {
                 spacing: 14 * panel.unit
                 Label {
                     width: parent.width
-                    text: panel.page === "security" ? "sec-core · 安全检查" : "Tokenless · 降低词元开销"
+                    text: panel.page === "security" ? panel.tr("sec-core · Security checks") : panel.tr("Tokenless · Reduce token usage")
                     font.pixelSize: 18 * panel.unit; font.weight: Font.DemiBold
                 }
                 Rectangle {
@@ -281,17 +309,17 @@ Rectangle {
                         x: 14 * panel.unit; y: 14 * panel.unit
                         width: parent.width - 28 * panel.unit
                         spacing: 9 * panel.unit
-                        Label { text: panel.page === "security" ? "近期扫描记录" : "工具内容估算减少"; color: "#a3ada8" }
+                        Label { text: panel.page === "security" ? panel.tr("Recent scans") : panel.tr("Estimated tool-content reduction"); color: "#a3ada8" }
                         Label {
                             objectName: "metricValue"
                             width: parent.width
-                            text: panel.page === "security" ? panel.metric("security", "checked") + " 条" : panel.metric("tokenless", "saved") + " 词元"
+                            text: panel.page === "security" ? panel.metric("security", "checked") + panel.tr(" records") : panel.metric("tokenless", "saved") + panel.tr(" tokens")
                             color: "#b7d9be"; font.pixelSize: 28 * panel.unit; font.weight: Font.DemiBold
                         }
                         Label {
                             width: parent.width
-                            text: panel.page === "security" ? "发现风险 " + panel.metric("security", "risks") + " 次\n执行阻断 " + panel.metric("security", "blocked")
-                                : "处理前 " + panel.metric("tokenless", "before") + " → 处理后 " + panel.metric("tokenless", "after") + "\n记录 " + panel.metric("tokenless", "records") + " 条"
+                            text: panel.page === "security" ? panel.tr("Risks found: ") + panel.metric("security", "risks") + panel.tr("\nExecution blocks: ") + panel.metric("security", "blocked")
+                                : panel.tr("Before: ") + panel.metric("tokenless", "before") + panel.tr(" → After: ") + panel.metric("tokenless", "after") + panel.tr("\nRecords: ") + panel.metric("tokenless", "records") + panel.tr(" records")
                             color: "#a3ada8"
                         }
                     }
@@ -300,27 +328,27 @@ Rectangle {
                     width: parent.width
                     text: panel.page === "security"
                         ? (((panel.report.security || ({})).recent_risks || []).map(function(item) {
-                            return (item.timestamp || "时间未知") + " · " + (item.verdict === "deny" ? "拒绝建议" : "风险提示")
-                        }).join("\n") || (panel.componentStatus("security") === "不可用" ? "暂时无法读取扫描记录。" : "暂无风险详情。"))
-                        : "估算的是交给模型的工具内容，不是模型总消耗，也不代表账单节省。"
+                            return (item.timestamp || panel.tr("Time unknown")) + " · " + (item.verdict === "deny" ? panel.tr("Deny recommendation") : panel.tr("Risk warning"))
+                        }).join("\n") || (panel.componentStatus("security") === panel.tr("Unavailable") ? panel.tr("Scan records are currently unavailable.") : panel.tr("No risk details yet.")))
+                        : panel.tr("Estimates cover tool content sent to the model, not total model usage or billing savings.")
                     color: "#a3ada8"
                 }
                 Label {
                     width: parent.width
                     text: panel.page === "security"
-                        ? "最近最多 200 条服务扫描记录。当前接入 Qoder 的 Bash 工具。执行阻断需要独立证据。"
-                        : "当前用户最近最多 200 条记录。估算值用于比较工具内容。"
+                        ? panel.tr("Up to 200 recent service scans. Covers Qoder Bash calls. Execution blocking requires separate evidence.")
+                        : panel.tr("Up to 200 recent records for this user. Estimates compare tool content.")
                     color: "#a3ada8"; font.pixelSize: 12 * panel.unit
                 }
                 Label {
                     width: parent.width
-                    text: panel.componentStatus(panel.page) + " · " + ((panel.report[panel.page] || ({})).sampled_at || "更新时间未知")
+                    text: panel.componentStatus(panel.page) + " · " + ((panel.report[panel.page] || ({})).sampled_at || panel.tr("Update time unknown"))
                     color: "#a3ada8"; font.pixelSize: 11 * panel.unit
                 }
-                ActionButton { width: parent.width; text: "刷新"; quiet: true; unit: panel.unit; typeface: panel.typeface; onClicked: panel.refreshRequested() }
+                ActionButton { width: parent.width; text: panel.tr("Refresh"); quiet: true; unit: panel.unit; typeface: panel.typeface; onClicked: panel.refreshRequested() }
                 ActionButton {
                     objectName: "detailsButton"
-                    width: parent.width; text: "在终端查看完整详情 →"; unit: panel.unit; typeface: panel.typeface
+                    width: parent.width; text: panel.tr("Full details in terminal →"); unit: panel.unit; typeface: panel.typeface
                     onClicked: panel.actionRequested(panel.page === "security" ? "security" : "tokens")
                 }
             }
@@ -328,14 +356,14 @@ Rectangle {
                 visible: panel.page === "help"
                 width: parent.width
                 spacing: 12 * panel.unit
-                Label { text: "插件说明"; font.pixelSize: 18 * panel.unit; font.weight: Font.DemiBold }
-                Label { text: "在终端运行"; font.weight: Font.DemiBold }
-                Label { objectName: "helpCommands"; width: parent.width; text: "anolisa-omarchy help\n查看组件用途和使用入口。\n\nanolisa-omarchy status\n查看组件是否安装、配置和运行。\n\nanolisa-omarchy doctor\n查看安装和运行问题。" }
-                Label { text: "组件能做什么"; font.weight: Font.DemiBold }
-                Label { width: parent.width; text: "Qoder · 帮你读文件、执行命令和改代码。" }
-                Label { width: parent.width; text: "cosh · 带 AI 的工作终端。用 /auth 配模型，单独输入 /agent 后提问。" }
-                Label { width: parent.width; text: "Tokenless · 精简 Qoder 的部分工具输出，减少发给模型的词元。" }
-                Label { width: parent.width; text: "sec-core · 检查 Qoder 准备执行的 Bash 命令，记录发现的风险。" }
+                Label { objectName: "helpTitle"; text: panel.tr("Help"); font.pixelSize: 18 * panel.unit; font.weight: Font.DemiBold }
+                Label { text: panel.tr("Run in a terminal"); font.weight: Font.DemiBold }
+                Label { objectName: "helpCommands"; width: parent.width; text: panel.tr("anolisa-omarchy help\nLearn what the components do and how to open them.\n\nanolisa-omarchy status\nCheck installation, configuration and service status.\n\nanolisa-omarchy doctor\nCheck installation and runtime issues.") }
+                Label { text: panel.tr("What the components do"); font.weight: Font.DemiBold }
+                Label { width: parent.width; text: panel.tr("Qoder · Read files, run commands and edit code.") }
+                Label { width: parent.width; text: panel.tr("cosh · An AI work terminal. Configure a model with /auth, then enter /agent on its own to ask questions.") }
+                Label { width: parent.width; text: panel.tr("Tokenless · Shorten supported Qoder tool outputs to reduce tokens sent to the model.") }
+                Label { width: parent.width; text: panel.tr("sec-core · Check Qoder Bash commands before execution and record detected risks.") }
             }
         }
     }
@@ -347,14 +375,14 @@ Rectangle {
         Rectangle { width: parent.width - 2; x: 1; height: 1; color: "#30373b" }
         Label {
             x: 18 * panel.unit; anchors.verticalCenter: parent.verticalCenter
-            text: panel.busy ? "正在更新…" : "ANOLISA · 本机数据"
+            text: panel.busy ? panel.tr("Updating…") : panel.tr("ANOLISA · Local data")
             color: "#81978a"; font.pixelSize: 10 * panel.unit
         }
         ActionButton {
             objectName: "helpButton"
             anchors.right: parent.right; anchors.rightMargin: 12 * panel.unit
             anchors.verticalCenter: parent.verticalCenter
-            text: "插件说明"; quiet: true; unit: panel.unit; typeface: panel.typeface
+            text: panel.tr("Help"); quiet: true; unit: panel.unit; typeface: panel.typeface
             onClicked: panel.navigateRequested("help")
         }
     }

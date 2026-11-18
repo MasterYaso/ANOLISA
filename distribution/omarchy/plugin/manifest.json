@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "community.anolisa",
-  "name": "ANOLISA - AI 助手",
+  "name": "ANOLISA - AI Assistant",
   "version": "0.1.4",
   "author": "ANOLISA contributors",
   "license": "Apache-2.0 AND MIT",
@@ -9,7 +9,7 @@
   "kinds": ["bar-widget"],
   "entryPoints": {"barWidget": "Widget.qml"},
   "barWidget": {
-    "displayName": "ANOLISA - AI 助手",
+    "displayName": "ANOLISA - AI Assistant",
     "category": "AI",
     "defaultSection": "right",
     "allowMultiple": false,

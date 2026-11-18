@@ -6,7 +6,7 @@ A native Omarchy bar dropdown that opens cosh and an AW-managed Qoder session.
 Security and Tokenless details come from the components' public CLI interfaces.
 This integration does not replace Omarchy's desktop or terminal emulator.
 
-## Install 0.1.1
+## Install 0.1.2
 
 Open a terminal as the logged-in desktop user on Omarchy x86_64. From the clone:
 
@@ -15,21 +15,21 @@ cd distribution/omarchy
 bash ./install
 ```
 
-The script downloads the `omarchy-v0.1.1` GitHub Release asset, checks it against
+The script downloads the `omarchy-v0.1.2` GitHub Release asset, checks it against
 `SHA256SUMS` from this directory and runs the installer. If you already have the
-archive, pass `--archive /path/to/anolisa-omarchy-0.1.1.tar.gz` to the same script.
+archive, pass `--archive /path/to/anolisa-omarchy-0.1.2.tar.gz` to the same script.
 
 As the logged-in Omarchy desktop user, extract the candidate and run `./install`.
 It installs the bundled programs into a private user prefix, enables the native
 bar plugin and uses sudo once to deploy the root-required code-safety service.
 The safety daemon runs from a root-owned directory. The candidate contains the
 compiled programs. Open the bar widget after installation to configure cosh and
-Qoder independently, or defer setup. The wizard opens a compatible Qoder CLI
-1.1.84, or offers to install it if missing. Sign in within Qoder or provide a
-PAT through the ANOLISA wizard. The **插件说明** entry shows the common commands.
+Qoder independently, or defer setup. Qoder is optional. If it is missing, the wizard offers recommended version
+1.1.84 (default), the latest official release, or setup later. Sign in within Qoder or provide a
+PAT through the ANOLISA wizard. **Help** lists the common commands.
 
 The payload includes cosh, AW, two AW Providers, the sec-core code-scanning
-runtime, Tokenless and a pinned Qoder CLI. Qoder is third-party software subject
+runtime and Tokenless. Qoder CLI is downloaded separately from its official source. Qoder is third-party software subject
 to its own terms. A saved PAT indicates local configuration, not a successful
 model request. cosh has separate model authentication through `/auth`.
 
@@ -50,6 +50,16 @@ omarchy plugin remove community.anolisa
 To stop the service and disable startup, run
 `sudo systemctl disable --now anolisa-omarchy-security.service`. These commands
 preserve the installed programs, credentials and statistics for later reuse.
+
+## Interface language
+
+The current source and native package candidate default to English, even on a
+Chinese desktop. Open **Settings → Language / 语言** to select **English** or
+**简体中文**. The preference is saved for your user. New setup terminals and cosh
+sessions follow it; existing sessions keep running. Qoder keeps its own UI.
+Use `anolisa-omarchy language en-US` or `anolisa-omarchy language zh-CN` from a
+terminal. These settings require a candidate built from this source;
+use a matching 0.1.2 candidate or Release archive.
 
 ## Development
 
@@ -80,3 +90,34 @@ anchoring, focus and outside-click dismissal. Its MIT notice is included in
 
 License: [Apache-2.0](../../LICENSE), with MIT for the adapted Omarchy code.
 Bundled components retain their licenses.
+
+## Optional Qoder installation
+
+Open **Settings → Qoder version** to install or switch versions. The default is
+the fixed, tested 1.1.84 build. **Latest** resolves the official release manifest
+at installation time and verifies its SHA-256. A future untested build is labelled
+as unverified. Managed installations do not update silently; use the same entry
+again to update or return to the recommended version.
+
+```bash
+anolisa-omarchy qoder-install --channel recommended
+anolisa-omarchy qoder-install --channel latest
+```
+
+Programs live under `$XDG_DATA_HOME/anolisa-omarchy/qoder`, or
+`~/.local/share/anolisa-omarchy/qoder`. Account files stay in the existing private
+configuration directory. Changing versions and upgrading the plugin preserve them.
+Downloads require access to Qoder's official HTTPS service and show progress.
+The plugin checks both the archive checksum and the executable's reported version.
+
+For the native Arch package candidate:
+
+```bash
+sudo pacman -U ./anolisa-omarchy-0.1.2-1-x86_64.pkg.tar.zst
+anolisa-omarchy enable
+```
+
+Before removing that package, run `anolisa-omarchy disable`, then
+`sudo pacman -R anolisa-omarchy`. This preserves separately downloaded Qoder,
+account configuration and statistics. The archive installer and native package
+are separate installation modes; remove the old mode before switching.

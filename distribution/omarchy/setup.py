@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from i18n import tr
+
 
 def private_directory(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -69,7 +71,9 @@ def lock(path: Path) -> Iterator[None]:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError("已有设置或安装操作正在运行，请返回原终端。") from None
+            raise ValueError(
+                tr("Setup or installation is already running. Return to the original terminal.")
+            ) from None
         yield
 
 

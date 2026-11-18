@@ -15,23 +15,28 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from i18n import tr
+
 import agent_installation as agents
+import i18n
 import setup
 
 APP_ID = "community.anolisa"
 SERVICE = "anolisa-omarchy-security.service"
 SERVICE_UNIT = Path("/etc/systemd/system") / SERVICE
 SOCKET = "/run/anolisa-omarchy/sec-core.sock"
-COSH_SETTINGS = "顶栏 ANOLISA → 设置 → 设置 cosh"
-QODER_SETTINGS = "顶栏 ANOLISA → 设置 → 设置 Qoder"
-COMPONENT_HELP = """ANOLISA - AI 助手 · 组件帮助
+COSH_SETTINGS = tr("ANOLISA in the top bar → Settings → Set up cosh")
+QODER_SETTINGS = tr("ANOLISA in the top bar → Settings → Set up Qoder")
+COMPONENT_HELP = tr(
+    """ANOLISA - AI Assistant · Component help
 
-Qoder      读文件、执行命令和改代码。首页 → 用 Qoder 开始任务。
-cosh       带 AI 的工作终端。首页 → 打开工作终端。用 /auth 配模型，用 /agent 提问。
-Tokenless  精简 Qoder 的部分工具输出，减少发给模型的词元。首页 → Tokenless 看板。
-sec-core   检查 Qoder 准备执行的 Bash 命令，记录发现的风险。首页 → sec-core 看板。
+Qoder      Read files, run commands and edit code. Home → Use Qoder.
+cosh       An AI work terminal. Home → Open work terminal. Use /auth for models and /agent for questions.
+Tokenless  Shorten supported Qoder tool outputs to reduce tokens sent to the model. Home → Tokenless dashboard.
+sec-core   Check Qoder Bash commands before execution and record risks. Home → sec-core dashboard.
 
-status 查看当前状态，doctor 排查安装和运行问题。"""
+status shows component status; doctor checks installation and runtime issues."""
+)
 
 
 def locations() -> dict[str, Path]:
@@ -82,20 +87,24 @@ def read_credential(paths: dict[str, Path]) -> str | None:
 def authenticate(paths: dict[str, Path]) -> None:
     """Use a hidden prompt, not argv or a shell profile, for the Qoder PAT."""
     if not sys.stdin.isatty():
-        raise ValueError("请在交互终端配置 Qoder PAT。")
-    print("Qoder 认证：输入个人访问令牌（输入不回显，Ctrl+C 取消）。")
+        raise ValueError(tr("Configure your Qoder PAT in an interactive terminal."))
+    print(tr("Qoder account: enter your personal access token (hidden input; Ctrl+C to cancel)."))
     setup.private_read(credential_path(paths))
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
         try:
             token = getpass.getpass("Qoder PAT: ").strip()
         except getpass.GetPassWarning:
-            raise ValueError("当前终端无法隐藏输入，请换一个交互终端。") from None
+            raise ValueError(
+                tr("This terminal cannot hide input. Use another interactive terminal.")
+            ) from None
     if not token:
-        raise ValueError("未输入令牌；没有更改现有认证。")
+        raise ValueError(
+            tr("No token entered. Your existing account configuration was not changed.")
+        )
     setup.private_directory(paths["config"])
     setup.atomic_write(credential_path(paths), setup.json_bytes({"token": token}))
-    print("认证已保存到当前用户的私有配置；未验证的令牌不表示认证成功。")
+    print(tr("Token saved in your private configuration. The connection has not been verified."))
 
 
 def aw_document(paths: dict[str, Path], qoder: Path | None = None) -> dict[str, Any]:
@@ -247,7 +256,11 @@ def configuration_plan(
         if backup is not None and backup != previous:
             raise ValueError("Existing configuration differs (aw.demo2.json).")
         plan[config / "aw.demo2.json"] = previous
-    old_selection = selected is not None and selected["version"] != agents.VERSION
+    old_selection = (
+        selected is not None
+        and selected["source"] != "downloaded"
+        and selected["version"] != agents.VERSION
+    )
     if choice is None and (selected is None or old_selection):
         candidate = next(
             (
@@ -258,8 +271,7 @@ def configuration_plan(
             None,
         )
         choice = agents.selection(candidate) if candidate else None
-        if old_selection and choice is None:
-            raise ValueError("升级后的 Qoder CLI 未通过兼容检查。")
+        # Missing optional Qoder must not prevent upgrading or using cosh.
     selected = choice or selected
     if selected is not None:
         plan[config / "agent.json"] = setup.json_bytes(selected)
@@ -472,6 +484,7 @@ def status(paths: dict[str, Path], *, diagnostic: bool = False) -> dict[str, Any
     report = {
         "schema_version": 2,
         "ok": True,
+        "ui": i18n.ui_state(),
         "authConfigured": pat,
         "setup": {
             "needs_prompt": not state["deferred"]
@@ -521,56 +534,58 @@ def component_states(paths: dict[str, Path], report: dict[str, Any]) -> dict[str
 
     qoder = report["qoder"]
     qoder_installation = {
-        "compatible": "已安装",
-        "incompatible": "版本不兼容",
-        "missing": "未安装",
-    }.get(qoder["installation"], "安装状态待确认")
+        "compatible": tr("Installed"),
+        "incompatible": tr("Incompatible version"),
+        "missing": tr("Not installed"),
+    }.get(qoder["installation"], tr("Installation not verified"))
     if qoder["installation"] != "compatible":
-        qoder_state = "请检查程序选择"
+        qoder_state = tr("Check the selected program")
     elif qoder["configuration"] == "missing":
-        qoder_state = "待填写 PAT"
+        qoder_state = tr("PAT required")
     elif qoder["choice"] in ("pending", "skipped"):
-        qoder_state = "待设置"
+        qoder_state = tr("Not configured")
     elif qoder["verification"]["result"] == "passed":
-        qoder_state = "上次连接检查通过"
+        qoder_state = tr("Last connection check passed")
     elif qoder["verification"]["result"] == "failed":
-        qoder_state = "连接检查未通过"
+        qoder_state = tr("Connection check failed")
     elif qoder["configuration"] == "present":
-        qoder_state = "PAT 已配置，连接待验证"
+        qoder_state = tr("PAT configured; connection not verified")
     else:
-        qoder_state = "登录状态待确认"
+        qoder_state = tr("Account status not verified")
+    if qoder.get("build_validation") == "not_verified":
+        qoder_state += " · " + tr("Latest build; plugin compatibility not verified")
 
     cosh = report["cosh"]
     cosh_installed = cosh["installation"] == "compatible"
-    cosh_state = "待配置模型"
+    cosh_state = tr("Model not configured")
     if not cosh_installed:
-        cosh_state = "请重新安装"
+        cosh_state = tr("Please reinstall")
     elif cosh["verification"]["result"] == "passed":
-        cosh_state = "上次连接检查通过"
+        cosh_state = tr("Last connection check passed")
     elif cosh["verification"]["result"] == "failed":
-        cosh_state = "连接检查未通过"
+        cosh_state = tr("Connection check failed")
     elif cosh["reported_configured"]:
-        cosh_state = "模型已配置，连接待验证"
+        cosh_state = tr("Model configured; connection not verified")
     elif cosh["choice"] == "configure":
-        cosh_state = "模型配置待确认"
+        cosh_state = tr("Model configuration not confirmed")
 
     tokens_installed = executable("tokenless")
     provider_installed = executable("aw-provider-tokenless")
     if not tokens_installed or not provider_installed:
-        tokens_state = "程序文件不全，请重新安装"
+        tokens_state = tr("Program files are incomplete; please reinstall")
     elif "configuration" in issues:
-        tokens_state = "待接入"
+        tokens_state = tr("Integration not configured")
     else:
         tokens_state = {
-            "observed": "已接入，已有处理记录",
-            "empty": "已接入，暂无处理记录",
-        }.get(report["tokenless"]["state"], "已接入，统计暂不可读")
+            "observed": tr("Integrated; processing records available"),
+            "empty": tr("Integrated; no processing records yet"),
+        }.get(report["tokenless"]["state"], tr("Integrated; statistics unavailable"))
 
     security_installed = executable("agent-sec-cli") and executable("agent-sec-daemon")
     if not security_installed or not SERVICE_UNIT.is_file():
-        security_state = "服务未安装"
+        security_state = tr("Service not installed")
     elif "security_service" not in issues:
-        security_state = "服务运行中"
+        security_state = tr("Service running")
     else:
         try:
             active = (
@@ -581,13 +596,16 @@ def component_states(paths: dict[str, Path], report: dict[str, Any]) -> dict[str
             )
         except (OSError, subprocess.SubprocessError):
             active = False
-        security_state = "服务健康检查未通过" if active else "服务未运行"
+        security_state = tr("Service health check failed") if active else tr("Service not running")
 
     return {
         "Qoder": (qoder_installation, qoder_state),
-        "cosh": ("已安装" if cosh_installed else "未安装", cosh_state),
-        "Tokenless": ("已安装" if tokens_installed else "未安装", tokens_state),
-        "sec-core": ("已安装" if security_installed else "未安装", security_state),
+        "cosh": (tr("Installed") if cosh_installed else tr("Not installed"), cosh_state),
+        "Tokenless": (tr("Installed") if tokens_installed else tr("Not installed"), tokens_state),
+        "sec-core": (
+            tr("Installed") if security_installed else tr("Not installed"),
+            security_state,
+        ),
     }
 
 
@@ -597,14 +615,46 @@ def print_status(paths: dict[str, Path], report: dict[str, Any], *, diagnostic: 
         issues = set(report["issues"])
         security_state = rows["sec-core"][1]
         checks = {
-            "qoder_selection": ("Qoder", "程序选择无法读取", "在设置中重新选择 Qoder 程序"),
-            "qoder_credential": ("Qoder", "PAT 配置无法读取", "重新配置 Qoder PAT"),
-            "configuration": ("Qoder 增强", "受管配置缺失或已修改", "重新运行安装器并检查提示"),
-            "qoder_installation": ("Qoder", rows["Qoder"][0], "在设置中选择可用程序"),
-            "cosh_installation": ("cosh", "程序未安装", "重新运行安装器"),
-            "security_service": ("sec-core", security_state, "重新运行安装器并检查服务日志"),
-            "security_records": ("sec-core", "扫描记录无法读取", "检查安全服务日志"),
-            "tokenless_records": ("Tokenless", "处理记录无法读取", "打开 Tokenless 看板查看详情"),
+            "qoder_selection": (
+                "Qoder",
+                tr("Cannot read the program selection"),
+                tr("Select the Qoder program again in Settings"),
+            ),
+            "qoder_credential": (
+                "Qoder",
+                tr("Cannot read the PAT configuration"),
+                tr("Configure your Qoder PAT again"),
+            ),
+            "configuration": (
+                tr("Qoder enhancements"),
+                tr("Managed configuration is missing or modified"),
+                tr("Run the installer again and follow its instructions"),
+            ),
+            "qoder_installation": (
+                "Qoder",
+                rows["Qoder"][0],
+                tr("Select a compatible program in Settings"),
+            ),
+            "cosh_installation": (
+                "cosh",
+                tr("Program not installed"),
+                tr("Run the installer again"),
+            ),
+            "security_service": (
+                "sec-core",
+                security_state,
+                tr("Run the installer again and check the service logs"),
+            ),
+            "security_records": (
+                "sec-core",
+                tr("Cannot read scan records"),
+                tr("Check the safety service logs"),
+            ),
+            "tokenless_records": (
+                "Tokenless",
+                tr("Cannot read processing records"),
+                tr("Open the Tokenless dashboard for details"),
+            ),
         }
         if "qoder_selection" in issues:
             issues.discard("qoder_installation")
@@ -612,16 +662,24 @@ def print_status(paths: dict[str, Path], report: dict[str, Any], *, diagnostic: 
             issues.discard("security_records")
         problems = [checks[issue] for issue in checks if issue in issues]
         if report["qoder"]["configuration"] == "missing" and "qoder_credential" not in issues:
-            problems.append(("Qoder", "尚未填写 PAT", "在设置中填写令牌或切换到 Qoder CLI 登录"))
-        if rows["Tokenless"][1] == "程序文件不全，请重新安装":
-            problems.append(("Tokenless", "程序文件不全", "重新运行安装器"))
-        if security_state == "服务未安装" and "security_service" not in issues:
-            problems.append(("sec-core", security_state, "重新运行安装器"))
+            problems.append(
+                (
+                    "Qoder",
+                    tr("PAT not provided"),
+                    tr("Enter a PAT in Settings or switch to account setup in Qoder CLI"),
+                )
+            )
+        if rows["Tokenless"][1] == tr("Program files are incomplete; please reinstall"):
+            problems.append(
+                ("Tokenless", tr("Program files are incomplete"), tr("Run the installer again"))
+            )
+        if security_state == tr("Service not installed") and "security_service" not in issues:
+            problems.append(("sec-core", security_state, tr("Run the installer again")))
         if problems:
             for name, reason, next_step in problems:
-                print(f"{name}  {reason}。{next_step}。")
+                print(tr("{0}  {1}. {2}.", name, reason, next_step))
         else:
-            print("未发现安装或运行问题。")
+            print(tr("No installation or runtime issues found."))
         return
 
     try:
@@ -629,12 +687,22 @@ def print_status(paths: dict[str, Path], report: dict[str, Any], *, diagnostic: 
         version = metadata.get("version", "") if isinstance(metadata, dict) else ""
     except (OSError, ValueError):
         version = ""
-    print(f"ANOLISA - AI 助手 {version}".rstrip())
-    print("\n组件        安装状态    当前状态")
+    print(tr("ANOLISA - AI Assistant {0}", version).rstrip())
+    print(
+        tr(
+            """
+Component   Installation   Current status"""
+        )
+    )
     for name, (installation, state) in rows.items():
         print(f"{name:<12}{installation}    {state}")
     if report["setup"]["needs_prompt"]:
-        print("\n下一步  从顶栏打开 ANOLISA - AI 助手，点击「开始设置」。")
+        print(
+            tr(
+                """
+Next: open ANOLISA in the top bar and select Start setup."""
+            )
+        )
 
 
 def run_agent(
@@ -647,14 +715,18 @@ def run_agent(
         selected = agents.read_selection(config)
         report = agents.validate(paths["prefix"], selected)
         if report["installation"] != "compatible":
-            raise ValueError("Qoder 程序不可用或已变更，请在设置中重新选择。")
+            raise ValueError(
+                tr("The Qoder program is unavailable or has changed. Select it again in Settings.")
+            )
         if check_managed_config(paths, selected) is None:
-            raise ValueError("安装配置缺失，请重新运行安装程序。")
+            raise ValueError(tr("Installation configuration is missing. Run the installer again."))
         env = environment(paths)
         if auth_mode(paths, state) == "pat":
             token = env.get(agents.PAT) or read_credential(paths)
             if not token:
-                raise ValueError("请在设置中补充 Qoder PAT 或切换到原生登录。")
+                raise ValueError(
+                    tr("Enter a Qoder PAT in Settings or switch to account setup in Qoder CLI.")
+                )
             env[agents.PAT] = token
         else:
             env.pop(agents.PAT, None)
@@ -671,10 +743,10 @@ def run_agent(
         "--agent",
         "qoder",
     ]
-    if report["source"] == "bundled":
+    if report["source"] in ("bundled", "downloaded"):
         settings = json.loads(native_settings.read_text()) if native_settings else {}
         if not isinstance(settings, dict) or not isinstance(settings.get("general", {}), dict):
-            raise ValueError("Qoder 设置需要使用 JSON 对象。")
+            raise ValueError(tr("Qoder settings must be a JSON object."))
         settings.setdefault("general", {})["enableAutoUpdate"] = False
         with tempfile.TemporaryDirectory(dir=paths["run"]) as directory:
             overlay = Path(directory) / "settings.json"
@@ -688,19 +760,59 @@ def run_agent(
 
 
 def run_cosh(paths: dict[str, Path], arguments: list[str]) -> int:
-    print("cosh：输入 /auth 配置模型，/status 查看状态。", flush=True)
-    print("单独输入 /agent 回车，再在 ◆ 后写问题并回车。Esc 返回 shell，exit 退出。", flush=True)
+    print(tr("cosh: use /auth to configure a model and /status to check its status."), flush=True)
+    print(
+        tr(
+            "Enter /agent on its own, then type your question after ◆. Esc returns to the shell; exit closes it."
+        ),
+        flush=True,
+    )
     env = environment(paths)
     env.pop(agents.PAT, None)
     # Mise's missing-command handler takes precedence over cosh's natural-language routing.
     env["MISE_NOT_FOUND_AUTO_INSTALL"] = "0"
+    # Only this cosh process follows the plugin language; user and system locales stay intact.
+    env["COSH_SHELL_LANG"] = i18n.language()
     return subprocess.call([str(paths["prefix"] / "bin/cosh"), *arguments], env=env)
 
 
 def skip_qoder(paths: dict[str, Path], state: dict) -> None:
     state["qoder"]["choice"] = "skipped"
     setup.save_state(paths["config"], state)
-    print(f"已跳过 Qoder 设置。之后可从{QODER_SETTINGS}继续。")
+    print(tr("Qoder setup skipped. Continue later from {0}.", QODER_SETTINGS))
+
+
+def install_qoder(paths: dict[str, Path], channel: str | None = None) -> bool:
+    """Keep program installation separate from account setup and preserve credentials."""
+    if channel is None:
+        print(tr("Qoder CLI is installed separately from the official source."))
+        print(
+            tr(
+                "1. Recommended version {0} (default)\n2. Latest version\n3. Set up later",
+                agents.VERSION,
+            )
+        )
+        answer = input(tr("Choose an option [default 1]: ")).strip() or "1"
+        if answer == "3":
+            print(tr("You can install Qoder later from Settings → Qoder version."))
+            return False
+        if answer not in ("1", "2"):
+            raise ValueError(tr("Choose 1, 2 or 3."))
+        channel = "recommended" if answer == "1" else "latest"
+    if channel == "latest":
+        print(
+            tr(
+                "Latest may not be verified with this plugin. You can reinstall the recommended version if needed."
+            )
+        )
+    report = agents.install(channel)
+    setup.private_directory(paths["config"])
+    write_plan(configuration_plan(paths, paths["prefix"], agents.selection(report)))
+    print(
+        tr("Qoder CLI {0} is installed. Next, configure your account.", report["version"]),
+        flush=True,
+    )
+    return True
 
 
 def choose_qoder(paths: dict[str, Path], state: dict) -> bool:
@@ -708,47 +820,47 @@ def choose_qoder(paths: dict[str, Path], state: dict) -> bool:
     usable = [item for item in candidates if item["installation"] == "compatible"]
     if not usable:
         if any(item["source"] == "existing" for item in candidates):
-            print("检测到本机 Qoder CLI，当前程序未通过插件兼容检查。")
-        print(f"未检测到可用的 Qoder CLI。现在安装 {agents.VERSION} 吗？")
-        answer = input("输入 1 安装，或直接按 Enter 跳过 ").strip()
-        if not answer:
+            print(tr("Qoder CLI was found, but it did not pass the plugin compatibility checks."))
+        print(tr("No compatible Qoder CLI found."))
+        if not install_qoder(paths):
             skip_qoder(paths, state)
             return False
-        if answer != "1":
-            raise ValueError("请输入 1 安装，或按 Enter 跳过。")
-        print(f"正在安装 Qoder CLI {agents.VERSION}…", flush=True)
-        with tempfile.TemporaryDirectory(dir=paths["run"]) as directory:
-            agents.stage_qoder(Path(directory), paths["prefix"].resolve() / "bin/qodercli")
-        candidate = agents.validate(paths["prefix"], None)
-        if candidate["installation"] != "compatible":
-            raise ValueError("安装后的 Qoder CLI 未通过校验。")
-        usable = [candidate]
-        print(f"Qoder CLI {candidate['version']} 已安装，接下来配置账户信息。")
+        usable = [
+            item
+            for item in agents.candidates(paths["prefix"])
+            if item["installation"] == "compatible"
+        ]
     else:
-        print("已检测到 Qoder CLI，接下来配置账户信息。")
+        print(tr("Qoder CLI detected. Next, configure your account."))
     current = agents.read_selection(paths["config"])
     selected = next((item for item in usable if agents.selection(item) == current), usable[0])
     plan = configuration_plan(paths, paths["prefix"], agents.selection(selected))
     existing_mode = auth_mode(paths, state)
     default_mode = "2" if existing_mode == "pat" else "1"
     print(
-        "\n在哪里配置 Qoder 账户信息？\n\n"
-        "1. 在 Qoder CLI 中配置\n"
-        "   打开 Qoder 后，按提示用浏览器或 PAT 完成认证。\n\n"
-        "2. 直接输入 Qoder PAT\n"
-        "   在这里粘贴令牌。插件会保存它，以后打开 Qoder 时自动使用。\n\n"
-        "3. 稍后设置"
+        tr(
+            """
+Where would you like to configure your Qoder account?
+
+1. Configure in Qoder CLI
+   Open Qoder and follow its browser or PAT authentication prompts.
+
+2. Enter your Qoder PAT here
+   Paste your token here. The plugin saves it and uses it when opening Qoder.
+
+3. Set up later"""
+        )
     )
-    mode = input(f"请选择 [默认 {default_mode}] ").strip().lower()
+    mode = input(tr("Choose an option [default {0}]: ", default_mode)).strip().lower()
     if mode == "3":
         skip_qoder(paths, state)
         return False
     mode = mode or default_mode
     if mode not in ("1", "2"):
-        raise ValueError("无效的认证选项。")
+        raise ValueError(tr("Invalid account setup option."))
     if mode == "2":
         if os.environ.get(agents.PAT) or read_credential(paths):
-            print("将使用现有的 Qoder PAT。")
+            print(tr("Your existing Qoder PAT will be used."))
         else:
             authenticate(paths)
     state["qoder"] = {"choice": "configure", "auth_mode": "native" if mode == "1" else "pat"}
@@ -766,8 +878,13 @@ def wizard(paths: dict[str, Path], component: str | None, *, defer: bool = False
             setup.save_state(paths["config"], state)
             return
         if not sys.stdin.isatty():
-            raise ValueError("请在交互终端运行设置。")
-        print("ANOLISA - AI 助手\ncosh 和 Qoder 可以分别配置，也可以稍后设置。")
+            raise ValueError(tr("Run setup in an interactive terminal."))
+        print(
+            tr(
+                """ANOLISA - AI Assistant
+Set up cosh and Qoder separately. You can skip either and return later."""
+            )
+        )
         open_qoder = False
         for name in (component,) if component else ("cosh", "qoder"):
             if component is None and state[name]["choice"] != "pending":
@@ -777,58 +894,98 @@ def wizard(paths: dict[str, Path], component: str | None, *, defer: bool = False
                     if component is None:
                         cosh = state["cosh"]
                         if cosh.get("reported_configured"):
-                            print("cosh 配置已完成。接下来要配置 Qoder 吗？")
+                            print(tr("cosh configuration is complete. Set up Qoder next?"))
                         elif cosh["choice"] == "skipped":
-                            print("已跳过 cosh。接下来要配置 Qoder 吗？")
+                            print(tr("cosh setup was skipped. Set up Qoder next?"))
                         else:
-                            print("cosh 配置待完成。接下来要配置 Qoder 吗？")
-                        print(f"直接按 Enter 跳过。之后可从{QODER_SETTINGS}继续。")
-                        answer = input("输入 1 继续配置 Qoder ").strip()
+                            print(tr("cosh setup is incomplete. Set up Qoder next?"))
+                        print(tr("Press Enter to skip. Continue later from {0}.", QODER_SETTINGS))
+                        answer = input(tr("Enter 1 to configure Qoder: ")).strip()
                         if not answer:
                             skip_qoder(paths, state)
                             continue
                         if answer != "1":
-                            raise ValueError("请输入 1 继续，或按 Enter 跳过。")
+                            raise ValueError(tr("Enter 1 to continue, or press Enter to skip."))
                     open_qoder = choose_qoder(paths, state)
                 else:
-                    print(f"配置 cosh 工作终端。之后可从{COSH_SETTINGS}继续。")
-                    answer = input("输入 1 开始配置，或直接按 Enter 跳过 ").strip()
+                    print(
+                        tr(
+                            "Set up the cosh work terminal. You can return later from {0}.",
+                            COSH_SETTINGS,
+                        )
+                    )
+                    answer = input(
+                        tr("Enter 1 to configure cosh, or press Enter to skip: ")
+                    ).strip()
                     if answer not in ("", "1"):
-                        raise ValueError("无效的 cosh 选项。")
+                        raise ValueError(tr("Invalid cosh setup option."))
                     if answer:
-                        print("进入 cosh 后，输入 /auth 配置模型。")
-                        print("配置完成后，输入 exit 返回此向导。")
-                        input("按 Enter 打开 cosh 进行配置 ")
+                        print(tr("Once cosh opens, enter /auth to configure a model."))
+                        print(tr("When finished, enter exit to return to this setup wizard."))
+                        input(tr("Press Enter to open cosh for configuration: "))
                         if run_cosh(paths, []) != 0:
-                            raise ValueError("cosh 退出异常。")
-                        confirmed = input("已在 cosh 配置模型？[y/N] ").strip().lower() == "y"
+                            raise ValueError(tr("cosh exited with an error."))
+                        confirmed = (
+                            input(tr("Have you configured a model in cosh? [y/N]: "))
+                            .strip()
+                            .lower()
+                            == "y"
+                        )
                         state["cosh"] = {"choice": "configure", "reported_configured": confirmed}
                     else:
                         state["cosh"]["choice"] = "skipped"
                     setup.save_state(paths["config"], state)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 location = COSH_SETTINGS if name == "cosh" else QODER_SETTINGS
-                print(f"{name} 设置未完成。{error}\n之后可从{location}重试。")
-        labels = {"pending": "待设置", "configure": "已处理，连接待验证", "skipped": "已跳过"}
+                print(
+                    tr(
+                        """{0} setup is incomplete. {1}
+Try again later from {2}.""",
+                        name,
+                        error,
+                        location,
+                    )
+                )
+        labels = {
+            "pending": tr("Not configured"),
+            "configure": tr("Configured; connection not verified"),
+            "skipped": tr("Skipped"),
+        }
         final = setup.read_state(paths["config"])
         for name in ("cosh", "qoder"):
             print(f"{name}  {labels[final[name]['choice']]}")
         check = (
-            "2" if open_qoder else input("可选检查：1 打开 cosh，2 打开 Qoder，回车结束：").strip()
+            "2"
+            if open_qoder
+            else input(
+                tr("Optional check: 1 opens cosh, 2 opens Qoder; press Enter to finish: ")
+            ).strip()
         )
     if check in ("1", "2"):
         name = "cosh" if check == "1" else "qoder"
         if open_qoder:
-            print("正在打开 Qoder CLI。用 /login 配置账户，完成后输入 exit 返回向导。")
+            print(
+                tr(
+                    "Opening Qoder CLI. Use /login to configure your account, then enter exit to return to setup."
+                )
+            )
         else:
-            print("请发送一个简单问题，看到结果后输入 exit 回到向导。")
+            print(tr("Ask a simple question, then enter exit to return to setup."))
         code = run_cosh(paths, []) if name == "cosh" else run_agent(paths, [])
-        answer = input("收到真实回答？[y 已收到 / n 失败 / 回车跳过记录] ").strip().lower()
+        answer = (
+            input(
+                tr("Did you receive a real response? [y yes / n failed / Enter skips recording]: ")
+            )
+            .strip()
+            .lower()
+        )
         if answer in ("y", "n"):
             with setup.lock(paths["run"]):
                 latest = setup.read_state(paths["config"])
                 if latest[name] != final[name]:
-                    raise ValueError("检查期间配置已改变，请重新检查。")
+                    raise ValueError(
+                        tr("Configuration changed during the check. Run the check again.")
+                    )
                 latest[name]["verification"] = {
                     "result": "passed" if code == 0 and answer == "y" else "failed",
                     "checked_at": timestamp(),
@@ -839,10 +996,15 @@ def wizard(paths: dict[str, Path], component: str | None, *, defer: bool = False
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="anolisa-omarchy",
-        description="ANOLISA - AI 助手。运行 anolisa-omarchy help 查看组件用途和使用入口。",
+        description=tr(
+            "ANOLISA - AI Assistant. Run anolisa-omarchy help for components and commands."
+        ),
     )
     actions = parser.add_subparsers(dest="action", required=True)
-    actions.add_parser("help", help="介绍组件用途和使用入口")
+    actions.add_parser("help", help=tr("Explain components and commands"))
+    actions.add_parser("language", help=tr("Show or change the interface language")).add_argument(
+        "value", nargs="?", choices=i18n.LANGUAGES
+    )
     for action in ("cosh", "auth", "configure", "security", "tokens"):
         actions.add_parser(action)
     for action in ("status", "doctor"):
@@ -852,6 +1014,7 @@ def main() -> int:
         group.add_argument("--component", choices=("cosh", "qoder"))
         group.add_argument("--defer", action="store_true")
     actions.add_parser("qoder").add_argument("--native-settings", type=Path)
+    actions.add_parser("qoder-install").add_argument("--channel", choices=("recommended", "latest"))
     arguments = sys.argv[1:]
     forwarded = []
     if "--" in arguments:
@@ -864,8 +1027,18 @@ def main() -> int:
     paths = locations()
     if action == "help":
         print(COMPONENT_HELP)
+        print(tr("\nLanguage: anolisa-omarchy language [en-US|zh-CN]"))
+    elif action == "language":
+        if options.value is not None:
+            i18n.set_language(options.value)
+        print(tr("Interface language: {0}", i18n.language()))
     elif action == "configure":
         configure(paths)
+    elif action == "qoder-install":
+        with setup.lock(paths["run"]):
+            install_qoder(paths, options.channel)
+        if sys.stdin.isatty():
+            input(tr("Press Enter to close."))
     elif action == "auth":
         with setup.lock(paths["run"]):
             state = setup.read_state(paths["config"])
@@ -876,9 +1049,14 @@ def main() -> int:
         try:
             return run_agent(paths, forwarded, options.native_settings)
         except (OSError, subprocess.SubprocessError):
-            print("安全检查服务不可用，请运行诊断并修复后重试。", file=sys.stderr)
+            print(
+                tr(
+                    "The safety service is unavailable. Run anolisa-omarchy doctor, fix the issue, and retry."
+                ),
+                file=sys.stderr,
+            )
             if sys.stdin.isatty():
-                input("按 Enter 关闭。")
+                input(tr("Press Enter to close."))
             return 1
     elif action == "cosh":
         return run_cosh(paths, forwarded)
@@ -891,7 +1069,7 @@ def main() -> int:
         else:
             print_status(paths, report, diagnostic=action == "doctor")
         if action == "doctor" and not options.json and sys.stdin.isatty():
-            input("按 Enter 关闭。")
+            input(tr("Press Enter to close."))
     else:
         command = (
             [str(paths["prefix"] / "bin/agent-sec-cli"), "events", "--limit", "50"]
@@ -900,7 +1078,7 @@ def main() -> int:
         )
         subprocess.run(command, env=environment(paths), check=False)
         if sys.stdin.isatty():
-            input("按 Enter 关闭。")
+            input(tr("Press Enter to close."))
     return 0
 
 
@@ -908,7 +1086,13 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (KeyboardInterrupt, EOFError):
-        print("\n已取消。", file=sys.stderr)
+        print(
+            tr(
+                """
+Cancelled."""
+            ),
+            file=sys.stderr,
+        )
         raise SystemExit(130) from None
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ANOLISA: {error}", file=sys.stderr)

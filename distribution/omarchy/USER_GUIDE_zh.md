@@ -17,12 +17,30 @@
 
 `./install --non-interactive` 在 sudo 无法无交互运行时退出。`./install --no-enable` 部署用户文件，跳过系统依赖安装、系统服务和桌面激活。模型认证在安装之后完成。
 
+## 界面语言
+
+0.1.2 候选包默认使用英文。
+在下拉面板打开 **Settings → Language / 语言**，选择 **English** 或 **简体中文**。
+保存后界面更新，关闭面板和重启后仍保留选择。
+
+```bash
+anolisa-omarchy language
+anolisa-omarchy language zh-CN
+anolisa-omarchy language en-US
+```
+
+偏好保存在 `$XDG_CONFIG_HOME/anolisa-omarchy/ui.json`；未设置 XDG_CONFIG_HOME 时，
+使用 `~/.config/anolisa-omarchy/ui.json`，文件权限为 0600。
+新运行的插件命令和设置终端使用所选语言，新开的 cosh 通过 `COSH_SHELL_LANG` 跟随。
+已有终端不会被重启。此设置不修改系统 LANG、shell 启动文件、模型凭证或 Qoder 自身界面。
+界面语言不限制提问语言。
+
 ## 第一次打开
 
 点击顶栏 **ANOLISA**，再点 **开始设置**。配置向导在 Omarchy 默认终端运行。两项可独立跳过。选择 **稍后** 会记住你的选择，之后可从面板的 **设置** 继续。
 
 1. **cosh**。输入 `1` 后先阅读说明，再按 Enter 打开 cosh。在 cosh 中输入 `/auth` 配置模型，用 `/status` 查看状态，输入 `exit` 回到向导。直接按 Enter 可以跳过。
-2. **Qoder**。输入 `1` 继续，或按 Enter 跳过。向导自动选用已通过兼容检查的 Qoder CLI 1.1.84。缺失时会询问是否安装固定版本。选 **在 Qoder CLI 中配置** 会打开 Qoder，按提示用浏览器或 PAT 认证。选 **直接输入 Qoder PAT** 时在向导里隐藏输入。选 **稍后设置** 时可以从 **设置 → 设置 Qoder** 继续。升级保留已有的登录方式和凭证。
+2. **Qoder**。输入 `1` 继续，或按 Enter 跳过。缺少 Qoder 时，可以选择推荐版本 1.1.84（默认）、官方最新版或稍后设置。安装包不含 Qoder 二进制。选 **在 Qoder CLI 中配置** 会打开 Qoder，按提示用浏览器或 PAT 认证。选 **直接输入 Qoder PAT** 时在向导里隐藏输入。选 **稍后设置** 时可以从 **设置 → 设置 Qoder** 继续。升级保留已有的登录方式和凭证。
 3. **可选连接检查**。向导可打开一个终端会话。完成一条真实问答后返回向导，可手工记录结果和时间。
 
 ## 提问和任务
@@ -31,7 +49,7 @@
 
 从面板打开 Qoder，在一次性项目目录测试。让 Qoder 通过 Bash 读取一个文本文件，写出 `RESULT.md`，核对文件和组件记录。安全服务不可用时，增强入口停止启动并提示运行检查。
 
-点面板右下角的 **插件说明** 查看常用命令和组件用途。
+点面板右下角的 **帮助** 查看常用命令和组件用途。
 
 ```bash
 ~/.local/bin/anolisa-omarchy setup
@@ -62,3 +80,30 @@
 一般安装失败会尝试恢复原插件、程序引用、受管配置和系统服务。查看终端提示及当前用户状态目录下的 `anolisa-omarchy/installation.json`，确认失败阶段和恢复结果。系统依赖安装由 pacman 独立记录。若安装中途断电或被强制终止，检查收据和系统服务待恢复记录，再决定重试。
 `help` 介绍组件用途和入口，`status` 查看安装与当前状态，`doctor` 查看排障提示。
 插件和自动化可以使用 `status --json` 或 `doctor --json`。连接结果由实际问答验证。
+
+## 按需安装 Qoder
+
+打开 **设置 → Qoder 版本**，可以安装或切换版本。默认推荐固定的 1.1.84。
+选择 **最新版** 时，安装器读取官方版本清单并校验 SHA-256；将来尚未验证的构建会明确标注。
+受管程序不会静默更新；需要更新或切回推荐版时，再使用同一入口。
+
+```bash
+anolisa-omarchy qoder-install --channel recommended
+anolisa-omarchy qoder-install --channel latest
+```
+
+程序保存在 `$XDG_DATA_HOME/anolisa-omarchy/qoder`；未设置时为
+`~/.local/share/anolisa-omarchy/qoder`。账户仍保存在原有的私有配置目录，切换版本
+和升级插件均会保留。下载需要访问 Qoder 官方 HTTPS 服务，终端会显示进度。
+安装器会核对归档校验值和程序实际报告的版本。
+
+原生 Arch 候选包的安装命令为：
+
+```bash
+sudo pacman -U ./anolisa-omarchy-0.1.2-1-x86_64.pkg.tar.zst
+anolisa-omarchy enable
+```
+
+卸载原生包前先执行 `anolisa-omarchy disable`，再执行
+`sudo pacman -R anolisa-omarchy`。单独下载的 Qoder、账户配置和统计会保留。
+归档安装和原生系统包是两种安装方式，切换前先移除原有方式。

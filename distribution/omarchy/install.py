@@ -135,7 +135,7 @@ def dependencies(release: Path, sudo: list[str]) -> list[str]:
         subprocess.run([*command, "--", *sorted(packages)], check=True)
         if required_libraries(release):
             raise ValueError("Some runtime libraries are still missing after installation.")
-    for name in ("aw", "cosh", "qodercli", "tokenless", "agent-sec-cli"):
+    for name in ("aw", "cosh", "tokenless", "agent-sec-cli"):
         result = subprocess.run(
             [str(release / "bin" / name), "--version"],
             timeout=10,
@@ -250,8 +250,8 @@ def install(bundle: Path, *, enable: bool, non_interactive: bool = False) -> Non
     print(
         f"Installed {metadata['version']}\nCommand: {command}\nSource: {metadata['source_commit']}"
     )
-    print(f"ANOLISA - AI 助手 {metadata['version']} 已安装完成。")
-    print("从顶栏打开 ANOLISA - AI 助手。登录可在首次引导或设置中完成。")
+    print(f"ANOLISA - AI Assistant {metadata['version']} is installed.")
+    print("Open ANOLISA in the top bar. Configure accounts in first-run setup or Settings.")
 
 
 def activate(

@@ -44,15 +44,15 @@ def test_qoder_auth_choice(
     inputs(monkeypatch, [mode, ""])
     runtime.wizard(paths, "qoder")
     output = capsys.readouterr().out
-    assert "在哪里配置 Qoder 账户信息？" in output
-    assert "按提示用浏览器或 PAT 完成认证" in output
-    assert "直接输入 Qoder PAT" in output
-    assert "3. 稍后设置" in output
+    assert "Where would you like to configure your Qoder account?" in output
+    assert "browser or PAT authentication prompts" in output
+    assert "Enter your Qoder PAT here" in output
+    assert "3. Set up later" in output
     assert "synthetic-demo4-pat" not in output
     state = runtime.setup.read_state(paths["config"])
     if mode == "1":
         assert state["qoder"]["auth_mode"] == "native"
-        assert "正在打开 Qoder CLI" in output and len(launches) == 1
+        assert "Opening Qoder CLI" in output and len(launches) == 1
         assert runtime.read_credential(paths) is None
     else:
         assert not launches
@@ -75,19 +75,21 @@ def test_missing_qoder_offers_install(
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     installed = []
 
-    def stage_qoder(_cache: Path, destination: Path) -> None:
+    def install_qoder(channel: str) -> dict:
+        destination = binary
         installed.append(destination)
         destination.write_bytes(data)
         destination.chmod(0o755)
+        return runtime.agents.inspect(destination, "bundled")
 
-    monkeypatch.setattr(runtime.agents, "stage_qoder", stage_qoder)
-    inputs(monkeypatch, ["1", "3", ""] if answer else ["", ""])
+    monkeypatch.setattr(runtime.agents, "install", install_qoder)
+    inputs(monkeypatch, ["1", "3", ""] if answer else ["3", ""])
     runtime.wizard(paths, "qoder")
     output = capsys.readouterr().out
-    assert "未检测到可用的 Qoder CLI" in output
-    assert "设置 → 设置 Qoder" in output
+    assert "No compatible Qoder CLI found" in output
+    assert "Settings → Set up Qoder" in output
     assert installed == ([binary] if answer else [])
-    assert ("接下来配置账户信息" in output) == bool(answer)
+    assert ("Next, configure your account" in output) == bool(answer)
 
 
 def test_upgrade_replaces_old_program_record(
@@ -134,7 +136,13 @@ def test_human_report_preserves_json(
     monkeypatch.setattr(sys, "argv", ["anolisa-omarchy", "status"])
     assert runtime.main() == 0
     output = capsys.readouterr().out
-    for text in ("0.1.0-demo.4", "待设置", "待配置模型", "暂无处理记录", "服务运行中"):
+    for text in (
+        "0.1.0-demo.4",
+        "Not configured",
+        "Model not configured",
+        "no processing records yet",
+        "Service running",
+    ):
         assert text in output
     monkeypatch.setattr(sys, "argv", ["anolisa-omarchy", "status", "--json"])
     assert runtime.main() == 0
@@ -144,7 +152,7 @@ def test_human_report_preserves_json(
     assert report["tokenless"]["state"] == "empty"
     monkeypatch.setattr(sys, "argv", ["anolisa-omarchy", "doctor"])
     assert runtime.main() == 0
-    assert capsys.readouterr().out == "未发现安装或运行问题。\n"
+    assert capsys.readouterr().out == "No installation or runtime issues found.\n"
 
     monkeypatch.setattr(runtime, "healthy", lambda _paths: False)
     run = runtime.subprocess.run
@@ -158,4 +166,7 @@ def test_human_report_preserves_json(
         ),
     )
     assert runtime.main() == 0
-    assert capsys.readouterr().out == "sec-core  服务未运行。重新运行安装器并检查服务日志。\n"
+    assert (
+        capsys.readouterr().out
+        == "sec-core  Service not running. Run the installer again and check the service logs.\n"
+    )

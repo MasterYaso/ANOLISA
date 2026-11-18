@@ -16,6 +16,7 @@ PopupWindow {
   property int contentWidth: Style.space(280)
   property int contentHeight: Style.space(200)
   property bool open: false
+  property int heldContentHeight: 0
   property bool centerOnBar: false
   // "click" — uses HyprlandFocusGrab so clicking outside dismisses the popup.
   // "hover" — passive overlay; the owning widget controls open via hover.
@@ -66,6 +67,16 @@ PopupWindow {
     else root.open = false
   }
 
+  function holdHeight() {
+    // Keep the native surface stable while the clicked footer opens Help.
+    // Its longer content scrolls inside the panel instead of moving the footer.
+    heldContentHeight = root.implicitHeight
+  }
+
+  function releaseHeight() {
+    heldContentHeight = 0
+  }
+
   default property alias contentItem: contentHolder.children
 
   visible: open || card.opacity > 0
@@ -74,9 +85,10 @@ PopupWindow {
   // meant for the bar underneath while it does.
   mask: Region { item: root.open ? card : null }
   implicitWidth: contentWidth
-  implicitHeight: contentHeight
+  implicitHeight: cappedContentHeight(heldContentHeight > 0 ? heldContentHeight : contentHeight)
 
   onOpenChanged: {
+    if (open) releaseHeight()
     if (!bar) return
     if (open) bar.requestPopout(coordinatorKey)
     else if (bar.activePopout === coordinatorKey) bar.releasePopout(coordinatorKey)
@@ -170,9 +182,8 @@ PopupWindow {
     Behavior on shown {
       id: showing
       NumberAnimation {
-        duration: Style.duration(showing.targetValue > 0 ? 180 : 120)
-        easing.type: Easing.Bezier
-        easing.bezierCurve: Style.easeOut
+        duration: 140
+        easing.type: Easing.OutCubic
       }
     }
     opacity: shown
