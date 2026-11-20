@@ -297,6 +297,27 @@
         "casparant"
       ],
       "status": "internal"
+    },
+    {
+      "id": "omarchy",
+      "display_name": "ANOLISA Omarchy integration",
+      "aliases": [
+        "anolisa-omarchy"
+      ],
+      "issue_option": "omarchy",
+      "path_prefixes": [
+        "distribution/omarchy/"
+      ],
+      "supporting_paths": [
+        ".github/actions/build-omarchy-prebuilt/"
+      ],
+      "label": "component:omarchy",
+      "commit_scope": "omarchy",
+      "commit_scope_aliases": [],
+      "release_tag_prefix": "omarchy/v",
+      "ci_key": "omarchy",
+      "issue_triagers": [],
+      "status": "incubating"
     }
   ]
 }
