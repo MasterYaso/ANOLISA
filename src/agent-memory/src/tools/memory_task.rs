@@ -82,6 +82,16 @@ pub struct Task {
     pub context: String,
 }
 
+/// Clamp a caller-supplied progress percentage into the documented 0..=100 range.
+///
+/// The MCP layer receives the value as a `u32` (JSON numbers are unsigned
+/// there) while the task file stores a `u8`. Narrowing with a bare `as u8`
+/// wraps instead of saturating — `256` would become `0` and `300` would
+/// become `44` — so clamp before narrowing.
+pub(crate) fn clamp_progress(progress: u32) -> u8 {
+    progress.min(100) as u8
+}
+
 /// Summary of a task for list display (no context body).
 #[derive(Debug, Serialize)]
 pub struct TaskSummary {
@@ -256,7 +266,12 @@ fn parse_task(content: &str) -> Result<Task> {
                         _ => TaskStatus::InProgress,
                     };
                 }
-                "progress" => task.progress = value.parse().unwrap_or(0),
+                // `progress` is a percentage: clamp to the 0..=100 range the
+                // save path enforces, so a hand-edited (or model-written)
+                // frontmatter cannot resurrect an out-of-range value. Parse
+                // as `u32` first: `u8` would reject `300` outright and fall
+                // back to 0 instead of saturating at 100.
+                "progress" => task.progress = value.parse::<u32>().map(clamp_progress).unwrap_or(0),
                 "created_at" => task.created_at = value,
                 "updated_at" => task.updated_at = value,
                 _ => {}
@@ -307,13 +322,34 @@ fn load_all_tasks(svc: &MemoryService) -> Result<Vec<Task>> {
             _ => {}
         }
         let rel = std::path::Path::new(TASKS_DIR).join(entry.file_name());
+        // The file name is the id every other task tool addresses; frontmatter
+        // is not. Deriving it here keeps the listing to ids that resume, close
+        // and save accept, so a planted file cannot advertise an id the
+        // documented flow cannot reach. Validate before the read: a name that
+        // can never be listed is not worth opening.
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            tracing::warn!(
+                "skipping task file with a non-UTF-8 name: {:?}",
+                entry.file_name()
+            );
+            continue;
+        };
+        if let Err(err) = validate_task_id(stem) {
+            tracing::warn!(
+                "skipping task file whose name is not a valid task id: {} ({err})",
+                entry.file_name().to_string_lossy()
+            );
+            continue;
+        }
         let content = match crate::safe_fs::read_to_string(svc.mount.root_fd.as_fd(), &rel) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        if let Ok(task) = parse_task(&content) {
-            tasks.push(task);
-        }
+        let Ok(mut task) = parse_task(&content) else {
+            continue;
+        };
+        task.id = stem.to_string();
+        tasks.push(task);
     }
 
     // Sort by updated_at descending (most recent first).
@@ -353,7 +389,13 @@ fn read_task(svc: &MemoryService, id: &str) -> Result<Task> {
     validate_task_id(id)?;
     let rel = std::path::Path::new(TASKS_DIR).join(format!("{id}.md"));
     let content = crate::safe_fs::read_to_string(svc.mount.root_fd.as_fd(), &rel)?;
-    parse_task(&content)
+    let mut task = parse_task(&content)?;
+    // The file name is the id every task tool addresses. A frontmatter id
+    // naming a different task must not survive the read: close and save key
+    // their write on it, so keeping it would write to a file the listing
+    // never advertised and fork the task in two.
+    task.id = id.to_string();
+    Ok(task)
 }
 
 /// Whether a task file exists, without following symlinks: a symlinked
@@ -851,6 +893,75 @@ mod tests {
     }
 
     #[test]
+    fn reading_a_task_uses_the_file_name_as_its_id() {
+        let (_tmp, svc) = setup();
+        memory_task_save(
+            &svc,
+            "Planted task",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("claimed-id"),
+        )
+        .unwrap();
+        let tasks_dir = svc.mount.root.join(TASKS_DIR);
+        std::fs::rename(
+            tasks_dir.join("claimed-id.md"),
+            tasks_dir.join("real-id.md"),
+        )
+        .unwrap();
+
+        // Keeping the frontmatter id here would make close and save write to
+        // claimed-id.md while the listing advertises real-id, forking the task
+        // into two files.
+        let task = read_task(&svc, "real-id").unwrap();
+        assert_eq!(task.id, "real-id");
+    }
+
+    #[test]
+    fn task_listing_derives_the_id_from_the_file_name() {
+        let (_tmp, svc) = setup();
+        memory_task_save(
+            &svc,
+            "Planted task",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("claimed-id"),
+        )
+        .unwrap();
+
+        // Rename the file: the frontmatter still claims `claimed-id`, while the
+        // only id the other tools would look up is the file name.
+        let tasks_dir = svc.mount.root.join(TASKS_DIR);
+        std::fs::rename(
+            tasks_dir.join("claimed-id.md"),
+            tasks_dir.join("real-id.md"),
+        )
+        .unwrap();
+
+        // A file whose stem is not a valid id cannot be addressed at all, so it
+        // must not be listed either.
+        std::fs::write(tasks_dir.join("bad.id.md"), "---\nid: bad.id\n---\n").unwrap();
+
+        let tasks = load_all_tasks(&svc).unwrap();
+        assert_eq!(tasks.len(), 1, "only the addressable task is listed");
+        assert_eq!(
+            tasks[0].id, "real-id",
+            "the listed id must be one that resume, close and save accept"
+        );
+        assert!(memory_task_resume(&svc, &tasks[0].id).is_ok());
+    }
+
+    #[test]
     fn task_save_creates_when_explicit_id_missing() {
         let (_tmp, svc) = setup();
         // Explicit id that does not yet exist must create, not NotFound.
@@ -871,5 +982,41 @@ mod tests {
 
         let resume = memory_task_resume(&svc, "custom-id-42").unwrap();
         assert!(resume.contains("Brand new task"));
+    }
+
+    /// `progress` is documented as a percentage, so every entry point has to
+    /// saturate at 100 instead of wrapping. The MCP layer receives a `u32`
+    /// and narrows it to the `u8` the task file stores; a bare `as u8`
+    /// would turn `256` into `0` and `300` into `44`.
+    #[test]
+    fn progress_is_clamped_instead_of_wrapping() {
+        assert_eq!(clamp_progress(0), 0);
+        assert_eq!(clamp_progress(50), 50);
+        assert_eq!(clamp_progress(100), 100);
+        assert_eq!(clamp_progress(101), 100);
+        // The wrapping cases: `256 as u8 == 0`, `300 as u8 == 44`.
+        assert_eq!(clamp_progress(256), 100);
+        assert_eq!(clamp_progress(300), 100);
+        assert_eq!(clamp_progress(u32::MAX), 100);
+    }
+
+    /// The frontmatter is written by the agent (and can be hand-edited), so
+    /// the parse path has to enforce the same range the save path does —
+    /// otherwise a stored `progress: 150` resurfaces as "150%".
+    #[test]
+    fn parse_task_clamps_an_out_of_range_progress() {
+        let md = "---\nid: t-range\ntitle: Range\nstatus: in-progress\nprogress: 150\ncreated_at: 2026-06-11T10:00:00Z\nupdated_at: 2026-06-11T12:00:00Z\n---\n\nbody\n";
+        let parsed = parse_task(md).unwrap();
+        assert_eq!(parsed.progress, 100);
+
+        // A value above the u8 range still saturates instead of failing over.
+        let md_big = "---\nid: t-range\ntitle: Range\nstatus: in-progress\nprogress: 300\ncreated_at: 2026-06-11T10:00:00Z\nupdated_at: 2026-06-11T12:00:00Z\n---\n\nbody\n";
+        let parsed_big = parse_task(md_big).unwrap();
+        assert_eq!(parsed_big.progress, 100);
+
+        // A value that is not a number at all falls back to 0, as before.
+        let md_nan = "---\nid: t-range\ntitle: Range\nstatus: in-progress\nprogress: abc\ncreated_at: 2026-06-11T10:00:00Z\nupdated_at: 2026-06-11T12:00:00Z\n---\n\nbody\n";
+        let parsed_nan = parse_task(md_nan).unwrap();
+        assert_eq!(parsed_nan.progress, 0);
     }
 }

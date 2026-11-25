@@ -77,6 +77,10 @@ run_package "$OUT_TWO"
 
 ARTIFACT="sec-core-${VERSION}-linux-x86_64.tar.gz"
 cmp "$OUT_ONE/$ARTIFACT" "$OUT_TWO/$ARTIFACT"
+notices="$ROOT/v2/crates/asc-skill-score/assets"
+{ cat "$ROOT/LICENSE"; printf '\n'; cat "$notices/skill-score-NOTICE" "$notices/masb-LICENSE"; } > "$TMP/expected-license"
+tar -xOzf "$OUT_ONE/$ARTIFACT" ./share/doc/sec-core/LICENSE | cmp "$TMP/expected-license" -
+
 
 STAGE="$TMP/stage"
 make -C "$ROOT" stage-raw \
@@ -267,5 +271,33 @@ try:
 finally:
     manifest.write_text(original)
 PY
+
+PREVIEW_VERSION="${VERSION}-skillscore.123456789abc"
+if RAW_SKILL_SCORE_PAYLOAD="$OUT_ONE/$ARTIFACT" RAW_PREVIEW_VERSION="$PREVIEW_VERSION" \
+    run_package "$TMP/legacy-score-out" > "$TMP/legacy-score.log" 2>&1; then
+    echo "ERROR: base raw package accepted an embedded scoring runtime" >&2
+    exit 1
+fi
+grep -Fq 'base packages cannot embed assessment payloads' "$TMP/legacy-score.log"
+test ! -e "$TMP/legacy-score-out/sec-core-${PREVIEW_VERSION}-linux-x86_64.tar.gz"
+RAW_PREVIEW_VERSION="$PREVIEW_VERSION" run_package "$TMP/score-out"
+mkdir "$TMP/score-stage"
+tar -xzf "$TMP/score-out/sec-core-${PREVIEW_VERSION}-linux-x86_64.tar.gz" \
+    -C "$TMP/score-stage"
+cmp "$BUILD/v2/bin/agent-sec-cli" "$TMP/score-stage/bin/agent-sec-cli"
+test ! -e "$TMP/score-stage/bin/agent-sec-skill-score"
+test ! -e "$TMP/score-stage/lib/anolisa/sec-core/skill-score"
+test ! -e "$TMP/score-stage/lib/anolisa/sec-core-skill-score"
+grep -Fxq "version = \"$PREVIEW_VERSION\"" "$TMP/score-stage/.anolisa/component.toml"
+test -z "$(find "$TMP/score-stage" -name '*.tar*' -print -quit)"
+VARIANT_VERSION="$PREVIEW_VERSION.base.abcdef012345"
+RAW_PREVIEW_VERSION="$VARIANT_VERSION" run_package "$TMP/variant-out"
+tar -xOzf "$TMP/variant-out/sec-core-${VARIANT_VERSION}-linux-x86_64.tar.gz" \
+    ./.anolisa/component.toml | grep -Fxq "version = \"$VARIANT_VERSION\""
+if RAW_PREVIEW_VERSION="$PREVIEW_VERSION.base.invalid" run_package "$TMP/invalid-variant" \
+    > "$TMP/invalid-variant.log" 2>&1; then
+    echo "ERROR: base raw package accepted an invalid image variant" >&2
+    exit 1
+fi
 
 echo "OK: agent-sec-core V2 raw package tests passed"

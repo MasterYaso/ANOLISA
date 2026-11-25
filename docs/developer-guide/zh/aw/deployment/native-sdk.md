@@ -68,9 +68,12 @@ await aw.close();
 原生 Query、Hook、工具和模型继续运行。该目标适用的每个启用事件设置 `required: false`；AW 可达时，
 `on_error: block` 和明确拒绝仍然生效。该目标适用的启用事件要求 required 时，回退模式拒绝初始化。
 需要在 AW 失联时停止受保护操作，可显式传入 `availability: "required"`。
-可用性属于 SDK 生命周期选项，策略统一留在文件中。支持已配置输入的观察／阻断、工具前观察／阻断和
-工具后观察；不支持的效果和 Skill 路由在准入时拒绝。结果替换与最终结果门继续使用既有
-受管入口。
+可用性属于 SDK 生命周期选项，策略统一留在文件中。`qoder-public-hooks` 支持已配置输入和工具前的
+观察与阻断，以及工具后的观察与 `replace_result`。替换步骤使用 `on_error: report`，排在观察步骤之后。
+所有步骤接收原始工具结果。Adapter 在 `PostToolUse` 中通过 `hookSpecificOutput.updatedToolOutput`
+替换受支持的文本槽，保留结果的其他字段。`PostToolUseFailure` 提供错误详情供观察，缺少可替换的结果槽。Provider 出错时，接入层向应用
+传递错误并请求停止 Query。停止请求无法证明 Qoder 已扣留未经检查的结果。需要 `withhold_result`
+或最终结果检查时，使用已验收的受管入口。
 
 业务原生就绪后，部署方后台准备 sec-core，并以应用用户执行：
 
@@ -78,12 +81,16 @@ await aw.close();
 aw connect --config /absolute/aw.yaml --sdk-pid APPLICATION_PID --timeout-ms 10000
 ```
 
-设置 `daemon.startup: on_demand` 时，命令启动或复用 AW。PID 对应已安装接入模块的
-Node 应用。服务准备可与模型推理重叠；未配置 `input.submit` 时，不安装
-`UserPromptSubmit` 回调，也不在首次工具前创建 Scope。首次 `PreToolUse` 固定 Task 策略；required 模式等待 attach，
-可选模式在 AW 尚未 Ready 时立即固定原生回退；仅后策略同样通过内部前观察关联调用。纯文本回复不等待。
-`attachTimeoutMs` 默认为 5000 ms，超时会拒绝 required 工具；可选模式不等待 attach。准入后的每个 Query 持有一个 Scope，沿用既有失联／恢复合同。
-修改文件增加 `input.submit` 后，应先重启接入模块再 attach。
+设置 `daemon.startup: on_demand` 时，命令启动或复用 AW。PID 对应已安装接入模块的 Node
+应用。接入层只为各自启用的事件安装 `SessionStart` 和 `UserPromptSubmit`。两项都关闭时，
+模型推理可与挂接并行，首次 `PreToolUse` 固定 Task 策略。required 准入最多等待
+`attachTimeoutMs`，默认 5000 ms。回退模式可在 AW 不可用时继续原生运行。只配置工具后策略时，
+仍使用内部工具前观察关联调用。准入后的每个 Query 持有一个 Scope。
+
+启用 `session.start` 时，新生成的 `qoder-public-hooks` Descriptor 包含可选的
+`observe_session_start` 字段；其他 Profile 保持原有 Descriptor 字段不变。
+接入层将缺少该字段的旧 Descriptor 按关闭处理。启用 `session.start` 时重新生成
+Descriptor，变更任一启动事件后重启接入模块。
 
 `aw.query` 接受原生 Query 输入，返回保留原方法的代理；消费结束、提前退出迭代或显式
 `close()` 会关闭原生 Query 与 Scope。应用结束时关闭其余 Query。每个 Query 的 cwd
@@ -357,6 +364,48 @@ TypeScript 与异步 Python SDK 共用注册、Ready、Task/Scope、Provider 执
 - 同一对象实例的同一方法同一时刻只能由一个活动 `SourceSession` 插桩（重复插桩报
   `source_already_instrumented`）；并发处理多会话时请按请求使用独立对象实例或按会话直接包装函数。
 
+### 输入／结果改写与故障扣留（`replace_input`、`replace_result`、`withhold_result`）
+
+按 `LanguageSource` 实例显式开启，保持既有 observe/block 调用方完全兼容：
+
+- 在 TypeScript 的 `LanguageSource.create(...)` 传入 `replaceInput: true`、
+  `replaceResult: true` 和／或 `withholdResult: true`（Python 为 `replace_input=True`、
+  `replace_result=True`、`withhold_result=True`）；路由确认会拒绝任何未声明对应效果或
+  `withhold_result` 故障动作的策略步骤。
+- **`replace_input`**：当 `tool.before` Provider 返回获准修改后的参数时，`wrapTool`／
+  `wrap_tool` 安全重建普通 JSON dict/object 参数（或调用可选 `applyInput`／`apply_input`
+  处理自定义参数形态），并在原生执行前复核投影输入；无法安全重建的形态报
+  `source_input_replace_unsupported`，绝不静默丢弃改写。
+- **`replace_result`、`withhold_result` 与严格输出隔离**：`tool.after` 返回替换文本时，
+  `wrapTool`／`wrap_tool` 替换字符串或普通结构化文本封装（或调用可选 `applyResult`／
+  `apply_result`），不支持的形态报 `source_result_replace_unsupported`。
+  在严格后置路由（`replace_result` 或 `on_error: withhold_result`）下：
+  - 未配置 `extractResult`／`extract_result` 时，SDK 仅接受严格普通 JSON 值（TypeScript
+    要求稠密普通数组且不含额外命名／不可枚举／Symbol／访问器属性，普通对象仅含可枚举字符串数据属性；
+    非流式 TypeScript 工具直接返回顶层 `undefined` 时为兼容无返回值函数会原样返回 `undefined`，
+    其送审 `tool.after` 投影为 `null`，而对象／数组内部或流分块中的 `undefined` 会被拒绝），
+    向调用方交付**与审核记录完全一致的独立 JSON 副本（exact audited JSON value）**；
+    不透明自定义类型、稀疏数组、带额外属性的数组以及未缓冲惰性迭代器／生成器均失败关闭
+    （`source_result_isolation_required` 或 `source_stream_withhold_requires_buffering`）。
+  - 配置 `extractResult`／`extract_result` 时，提取器在独立副本上仅求值一次，AW 审核其返回的规范化 JSON 投影。
+    非流式严格路由对不透明非 JSON 对象默认拒绝，仅当调用方同时提供 `snapshotResult`／
+    `snapshot_result`（隔离原生对象副本）时放行；此时 AW 审核的是提取投影而非不透明原生字段。
+  - `on_error: withhold_result` 下必需 `tool.after` 检查故障时抛出 `SourceResultWithheld`
+    （`toolExecuted`／`tool_executed = True`），绝不返回未审核原文；`on_error: report` 下，
+    `tool.after` 的已审计可恢复 Provider 故障会记录日志并放行原结果，Scope／RPC／取消／审计等故障仍失败关闭。
+- **流式诚实边界与统一字节预算**：未缓冲的流式工具无法撤回已产出分块。当 `tool.after`
+  准入 `replace_result` 或 `on_error: withhold_result` 时，未缓冲流（异步生成器或同步生成器／迭代器）
+  在启动原生生成器前即报 `source_stream_withhold_requires_buffering`。设置 `bufferStream: true`／
+  `buffer_stream=True` 可将隔离后的严格普通 JSON 分块快照缓冲至 `maxStreamItems`／
+  `max_stream_items` 与 `maxStreamBytes`／`max_stream_bytes`（默认 `1048576` 字节）双上限。
+  该字节预算仅适用于流缓冲（普通非流式结果无此流预算），按紧凑 UTF-8 JSON 计量（TypeScript 为
+  `JSON.stringify` UTF-8 字节，Python 为 `separators=(",", ":")` 且 `ensure_ascii=False`；传输层
+  采用 ASCII 转义的 JSON-RPC 帧可能略长于紧凑计量值）。严格流缓冲拒绝无法准确计量的不透明自定义类型
+  （即使已配置 `extractResult`／`extract_result` 或 `snapshotResult`／`snapshot_result`，仍报
+  `source_result_isolation_required`），并将 `maxStreamBytes`／`max_stream_bytes` 统一应用于
+  **缓冲分块快照数组（含空流 `[]` 占 2 字节）**与**单次提取求值后实际送审 `tool.after` 载荷**的紧凑
+  UTF-8 JSON 字节长度。超限或扣留时立即关闭底层迭代器，并保证零分块产出。
+
 完整示例见 [TypeScript Source 示例](../../../../../src/aw/sdk/typescript/examples/language-source.mjs)
 与 [Python Source 示例](../../../../../src/aw/sdk/python/examples/language_source.py)。
 
@@ -400,11 +449,13 @@ SDK 不启动服务或 Agent。
 `bind(query)`。每个 Query 使用独立 task，先关闭 Query，再关闭 task；应用退出时
 关闭 Instance。同一 Query 只使用一种 AW 接线方式，避免与原 AW Query factory 重复。
 
-创建 `Instance` 时显式传入 endpoint、target、capabilities 和 availability。
-`cwd`、`environment` 默认采用应用值并构成任务上下文，不同目录的原生 Query 可通过
-`instance.task({cwd, environment})` 提供独立且复制后的任务上下文。`install(routes)` 仅在应用已安装对应事件路由时
-返回 `true`；登记及每个任务的策略快照均在 Ready 确认前调用它。
-示例将所有 Query 路由到 `qoderOptions`，遇到未知事件拒绝确认。
+创建 `Instance` 时显式传入 endpoint、target 和 availability。`@anolisa/aw-sdk-qoder` 导出
+`qoderProfile` 用于加载 Descriptor，导出 `qoderCapabilities(inputEnabled, sessionStartEnabled)` 用于登记，并提供
+`qoderInstallRoutes(routes, inputEnabled, sessionStartEnabled)` 供 `install(routes)` 校验协商后的路由。使用 WarmQuery 时，每个预热
+条目创建独立的 `Admission`，启动前将它与原生选项传给 `qoderOptions`，消费条目时绑定实际 Query。
+安装回调和登记能力使用相同的启动事件开关。`install(routes)` 在登记和每个任务获取策略快照时调用，只确认
+应用已接入的路由。`cwd`、`environment` 默认采用应用值。Query 使用不同目录或环境时，在 Task 或
+Admission 选项中传入实际目录和复制后的环境。
 
 `await instance.connect()` 执行一次有界连接尝试。只有 native-fallback 下的传输不可用
 或登记尚未完成时返回 `false`。`instance.start()` 启用单一后台重连流程，通过
@@ -471,17 +522,20 @@ aw disconnect --socket "$AW_SOCKET" --sdk-instance "$AW_SDK_INSTANCE"
 
 ## 已验证范围
 
-初版 Qoder 接线使用公开 `UserPromptSubmit`、`PreToolUse`、`PostToolUse` 和
-`PostToolUseFailure` 回调，效果处理复用 Adapter。原 Hook 分组保留，AW 回调追加；Worker 可以并发调度分组。AW 检查收到的回调快照，
-其他原生 Hook 后续改写参数的场景尚不具备最终输入保护保证。
+Qoder 接线使用公开 `UserPromptSubmit`、`PreToolUse`、`PostToolUse` 和
+`PostToolUseFailure` 回调。AW 保留原 Hook 分组并追加自己的回调。Worker 可以并发调度分组，
+原生观察 Hook 仍可能收到原始结果。其他 Hook 也返回替换时，需验证组合后的实际输出。
+AW 检查收到的回调快照，后续原生改写超出这个接点的覆盖范围。
 SDK 1.0.56／Worker 1.1.78 验收覆盖真实 Bash、原生 Hook 共存、Query 中途 AW 退出、
-新任务恢复接入、工具副作用恰好一次，以及 AW／原生拒绝时无工具副作用。包顶层不导入 Qoder，不读取私有 binding 文件。
+新任务恢复接入、工具副作用恰好一次，以及 AW／原生拒绝时无工具副作用。同版 SDK 和 Worker 的
+WarmQuery 在工具事件和后续模型轮次采用了 AW 替换后的 Bash 结果，已有原生 Post Hook 仍收到
+原始结果。包顶层不导入 Qoder，不读取私有 binding 文件。
 其他框架版本按声明能力协商，原生验收结论对应实际测试版本。
 
 原 resident `aw run` 路径保留更完整的托管 MCP、凭据与固定 Worker 接点。
 当前公开 Hook SDK 尚未提供这些附加托管能力。原生 MCP 配置继续由应用选项传入。
 Skill 检查沿用 Adapter resolver，并要求对应原生 Query 接口。
-输入／结果改写与 Skill／MCP 组合需要单独完成原生验收后再进入业务采用。
+输入改写与 Skill／MCP 组合需要单独完成原生验收后再进入业务采用。
 
 归属与 wire 合同见 [SDK 协议](../../../../../src/aw/docs/design/zh/runtime/native-sdk.md)；
 现有 required 入口见 [Qoder 指南](../agents/qoder-sdk.md)。

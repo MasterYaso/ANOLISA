@@ -53,6 +53,7 @@ def assert_core_tarball_boundary(artifact: Path) -> None:
         "package/dist/task-scope.mjs",
         "package/dist/sources.mjs",
         "package/dist/sources.d.ts",
+        "package/dist/source-mutation.mjs",
         "package/dist/native/shared/scope.mjs",
         "package/dist/native/shared/transport.mjs",
     ):
@@ -239,9 +240,13 @@ import { qoderOptions, createQoderBridge } from '@anolisa/aw-sdk/qoder';
 import {
   qoderOptions as directQoderOptions,
   createQoderBridge as directQoderBridge,
+  qoderProfile, qoderCapabilities, qoderInstallRoutes,
 } from '@anolisa/aw-sdk-qoder';
 assert.equal(typeof createQoderBridge, 'function');
 assert.equal(typeof directQoderBridge, 'function');
+assert.equal(qoderProfile.version, 'public-hooks/v1');
+assert.deepEqual(qoderCapabilities(false).events['tool.after'], ['observe','replace_result']);
+assert(qoderInstallRoutes({events:{},hooks:[]}, false));
 assert.equal(typeof runPiWorker, 'function');
 assert.equal(typeof directPiWorker, 'function');
 const instance = new Instance({endpoint: process.argv[2], target:'app',

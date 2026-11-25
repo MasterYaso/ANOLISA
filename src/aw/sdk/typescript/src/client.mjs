@@ -10,6 +10,42 @@ const neutral = () => ({
   stdout: Buffer.alloc(0),
   stderr: Buffer.alloc(0),
 });
+const UNSET = Symbol("unset");
+
+function isPlainRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function parseSdkDirective(event, directive) {
+  if (directive === undefined || directive === null) return ["none", undefined];
+  if (!isPlainRecord(directive)) throw new AwError("invalid_callback_response");
+  const keys = Object.keys(directive);
+  const kind = directive.type;
+  if (
+    event === "tool.before" &&
+    kind === "replace_input" &&
+    keys.length === 2 &&
+    Object.hasOwn(directive, "input")
+  ) {
+    if (!isPlainRecord(directive.input))
+      throw new AwError("invalid_callback_response");
+    return ["replace_input", directive.input];
+  }
+  if (event === "tool.after") {
+    if (kind === "withhold_result" && keys.length === 1)
+      return ["withhold", undefined];
+    if (
+      kind === "replace_result" &&
+      keys.length === 2 &&
+      Object.hasOwn(directive, "result")
+    )
+      return ["replace_result", directive.result];
+  }
+  throw new AwError("invalid_callback_response");
+}
 
 export class Instance {
   constructor(options) {
@@ -398,10 +434,10 @@ export class Task {
       null,
     );
   }
-  async invokeStep(hook, payload, signal) {
+  async invokeStepRaw(hook, payload, signal) {
     signal?.throwIfAborted();
     if (this.closed || this.closing) throw new AwError("task_closed");
-    if (this.fallback) return neutral();
+    if (this.fallback) return { ...neutral(), directive: undefined };
     const result = await this.call(
       {
         method: "sdk_callback",
@@ -414,7 +450,7 @@ export class Task {
       signal,
       Math.max(this.instance.options.timeoutMs, (hook.budget_ms ?? 0) + 1000),
     );
-    if (!result) return neutral();
+    if (!result) return { ...neutral(), directive: undefined };
     const bytes = (value) =>
       Array.isArray(value) &&
       value.length <= 1024 * 1024 &&
@@ -429,9 +465,26 @@ export class Task {
       code: result.code,
       stdout: Buffer.from(result.stdout),
       stderr: Buffer.from(result.stderr),
+      directive: result.directive,
     };
   }
-  /** Emit from an installed semantic boundary and adopt block before native work. */
+  async invokeStep(hook, payload, signal) {
+    const { code, stdout, stderr } = await this.invokeStepRaw(
+      hook,
+      payload,
+      signal,
+    );
+    return { code, stdout, stderr };
+  }
+  async invokeSemantic(hook, payload, signal = this.signal) {
+    try {
+      return await this.invokeStepRaw(hook, payload, signal);
+    } catch (error) {
+      await this.abortEvent(hook, payload);
+      throw error;
+    }
+  }
+  /** Emit from an installed semantic boundary and adopt block, rewrites and withholding. */
   async emit(event, payload, signal = this.signal) {
     signal?.throwIfAborted();
     if (this.closed || this.closing) throw new AwError("task_closed");
@@ -445,13 +498,22 @@ export class Task {
       event,
     };
     const hooks = this.routes.hooks.filter((hook) => hook.event === event);
+    let updatedInput;
+    let replacedResult = UNSET;
     for (const hook of hooks) {
-      const response = await this.invoke(hook, native, signal);
+      const response = await this.invokeSemantic(hook, native, signal);
       if (response.code === 2)
         return { decision: "block", coverage: "checked" };
       if (this.fallback) break;
+      if (response.directive !== undefined) {
+        const [kind, value] = parseSdkDirective(event, response.directive);
+        if (kind === "withhold")
+          return { decision: "withhold", coverage: "checked" };
+        if (kind === "replace_input") updatedInput = value;
+        else if (kind === "replace_result") replacedResult = value;
+      }
     }
-    return {
+    const reply = {
       decision: "continue",
       coverage: this.fallback
         ? "unavailable"
@@ -459,6 +521,9 @@ export class Task {
           ? "checked"
           : "not_configured",
     };
+    if (updatedInput !== undefined) reply.updated_input = updatedInput;
+    if (replacedResult !== UNSET) reply.replaced_result = replacedResult;
+    return reply;
   }
   async close() {
     if (this.closing) return this.closing;

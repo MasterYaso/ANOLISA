@@ -13,8 +13,9 @@
 AW 为不同 Agent 共用工具检查、结果处理和自定义规则。以下能力由 Adapter 接入原生工具流程；具体版本和启动步骤见[Agent 接入索引](../../../developer-guide/zh/aw/native-agents.md)。
 
 Python 和 TypeScript 应用均可通过 `sdk/application` profile 接入通用输入、工具和生命周期
-Hook。创建 `LanguageSource` 时声明需要的生命周期事件，再从应用的原生边界调用对应的
-`SourceSession` 方法。应用在结束轮次前采用 `turn.stop` 返回的决策。
+Hook，支持显式启用的 `replace_input`、`replace_result` 与 `withhold_result`（流式严格替换或
+扣留要求先完成有界缓冲）。创建 `LanguageSource` 时声明需要的生命周期事件，再从应用的原生边界
+调用对应的 `SourceSession` 方法。应用在结束轮次前采用 `turn.stop` 返回的决策。
 [通用 Runtime SDK 接入](../../../developer-guide/zh/aw/deployment/native-sdk.md#通用应用接入)
 
 ## Hook 支持矩阵
@@ -34,7 +35,7 @@ Hook。创建 `LanguageSource` 时声明需要的生命周期事件，再从应�
 | `qoder` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | × | × |
 | `qoder-sdk` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | × | × |
 | `qwenpaw` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | × | × | ✓ | × |
-| `sdk` | ✓ | ✓ | × | ✓ | × | ✓ | ✓ | × | × | ✓ | ✓ | ✓ | ✓ |
+| `sdk` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | ✓ | ✓ |
 <!-- aw-regression-matrix:end -->
 `tool.before` 可观察或阻断，`tool.after` 可观察或通过结构化 Provider 替换结果。布尔脚本和原生命令不能请求结果替换。
 配置可按[工具选择步骤](configuration.md#为-hook-步骤选择工具)，原生权限和拒绝优先。
@@ -219,6 +220,7 @@ QwenPaw 2.2.2.post1／AgentScope 2.0.10 的 after-only、before-only 和 input-o
 Hook，SDK 注册的 AW callbacks 仍执行。原生改参用例记录执行前终检缺口，并验证 AW
 明确拒绝时工具不会执行；这些用例不构成最终参数强制检查验收。
 
-配置式 Qoder SDK 接入使用原生公开 Hook 与协作 PID attach；未启用 input.submit 时，
-模型推理可先于 AW 开始，首次工具准入固定 Scope。支持输入／工具前观察和阻断、工具后
-观察；结果替换和最终检查继续沿用受管入口。见 [SDK 部署](../../../developer-guide/zh/aw/deployment/native-sdk.md#按配置接入-qoder)。
+配置式 Qoder SDK 接入使用原生公开 Hook 与协作 PID attach。关闭 `session.start` 和
+`input.submit` 时，模型推理可先于挂接开始，首次工具准入固定 Scope。`qoder-public-hooks` 支持输入和工具前的
+观察与阻断，也支持工具后观察和替换 `PostToolUse` 的受支持文本槽。`PostToolUseFailure` 提供
+错误详情供观察。故障扣留和最终结果检查使用受管入口。见 [SDK 部署](../../../developer-guide/zh/aw/deployment/native-sdk.md#按配置接入-qoder)。

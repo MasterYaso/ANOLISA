@@ -166,7 +166,7 @@ pub fn response(
                 Some("exit" | "incomplete_input" | "provider" | "protocol")
             ) || (output["failure"] == "transport"
                 && output["failure_detail"] == "deadline_exceeded"));
-        if matches!(adapter_id, "pi" | "deepseek-harness")
+        if matches!(adapter_id, "pi" | "deepseek-harness" | "sdk")
             && provider_fault
             && event == "tool.after"
             && on_error == "withhold_result"
@@ -193,7 +193,8 @@ pub fn response(
             )?;
             return Ok(adapter.reply(on_error == "block"));
         }
-        if (adapter_id == "pi" || claude_fault)
+        let sdk_fault = adapter_id == "sdk" && provider_fault;
+        if (adapter_id == "pi" || claude_fault || sdk_fault)
             && on_error == "report"
             && output["failure_action"] == "report"
             && event == "tool.after"

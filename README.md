@@ -46,6 +46,27 @@ by integrating their own system software optimized for Agent workloads into ANOL
 > approach to exploring this direction; ANOLISA is the core system software
 > stack in the Agentic OS architecture we design.
 
+```text
+Your Agent Apps & Frameworks   (Claude Code, Qoder, OpenClaw, Codex, custom harnesses...)
+          │
+          ▼
+┌─ ANOLISA System Software Stack ───────────────────────────────────────────────────
+│  User Entrypoint Layer   · cosh-ng (AI-native shell) · OS Skills (OS handbook)
+│  AW Unified Stack Layer  · AW + Provider protocol (open bus for Agents & backends)
+│  Agent Semantic Layer    · Context: tokenless, agent-memory
+│                          · Skills:  skillfs          · Recovery: ws-ckpt
+│                          · Security: agent-sec-core  · Observability: agentsight
+│  Install & Host Tooling  · anolisa CLI (install/lifecycle) · ktuner (kernel tuning)
+└───────────────────────────────────────────────────────────────────────────────────
+          │
+          ▼
+Existing OS Kernel & Infrastructure   (Linux-first: eBPF, FUSE, btrfs, seccomp · partial macOS)
+```
+
+- **Not an Agent framework** — enhances the Agents you already use without replacing their UI, models, or accounts.
+- **Not a new OS kernel or distro** — builds on existing Linux (and partially macOS) kernels and distributions.
+- **Not an all-or-nothing bundle** — enable individual components on demand, or compose them through `AW` and its open Provider protocol.
+
 > [!TIP]
 > **Want to contribute? Let your AI coding agent onboard you.**
 > Open this repository in your coding agent (Claude Code, Codex, Qoder, Cursor, Antigravity, etc.) and ask:
@@ -205,6 +226,7 @@ layer's role.
 |---|---|
 | [cosh (cosh-ng)](https://agentic-os.sh/docs/user-guide/cosh-ng/) | An AI-native terminal that preserves a familiar Shell experience, letting users call tools and Skills through natural language to complete tasks. |
 | [OS Skills](https://agentic-os.sh/docs/user-guide/os-skills/) | An OS handbook for AI Agents, covering system administration, monitoring, security, DevOps automation, and more. |
+| [Omarchy integration](distribution/omarchy/README.md) | Preview desktop entry points for cosh and Qoder, with local safety and tool-content views. |
 
 <a id="32-unified-integration-layer"></a>
 
@@ -387,7 +409,8 @@ ANOLISA is released under the [Apache License 2.0](LICENSE).
 [Troubleshooting](https://agentic-os.sh/docs/user-guide/getting-started/troubleshooting/) ·
 [Build from Source](https://agentic-os.sh/docs/user-guide/getting-started/building/) ·
 [Changelog](https://agentic-os.sh/changelog/) ·
-[For Agents](https://agentic-os.sh/agents/)
+[For Agents](https://agentic-os.sh/agents/) ·
+[llms.txt](https://agentic-os.sh/llms.txt)
 
 The unified source build requires Bash 4.4 or newer. For restricted networks,
 configure `NODE_DIST_MIRROR` and `RUSTUP_INIT_SCRIPT_URL` as described in

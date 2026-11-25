@@ -11,6 +11,27 @@ from uuid import uuid4
 from aw_sdk.transport import AwError, SDK, rpc, same_identity
 from aw_sdk.scope_watch import ScopeWatch
 
+_UNSET = object()
+
+
+def _parse_sdk_directive(event: str, directive: Any) -> tuple[str, Any]:
+    if directive is None:
+        return ("none", None)
+    if not isinstance(directive, dict):
+        raise AwError("invalid_callback_response")
+    kind = directive.get("type")
+    if event == "tool.before" and kind == "replace_input" and set(directive) == {"type", "input"}:
+        updated = directive["input"]
+        if not isinstance(updated, dict):
+            raise AwError("invalid_callback_response")
+        return ("replace_input", updated)
+    if event == "tool.after":
+        if kind == "withhold_result" and set(directive) == {"type"}:
+            return ("withhold", None)
+        if kind == "replace_result" and set(directive) == {"type", "result"}:
+            return ("replace_result", directive["result"])
+    raise AwError("invalid_callback_response")
+
 
 class Instance:
     """Connect installed callbacks to AW without starting either process."""
@@ -437,11 +458,11 @@ class Task:
             }
         )
 
-    async def _invoke_step(self, hook: dict, payload: dict) -> tuple[int, bytes, bytes]:
+    async def _invoke_step_raw(self, hook: dict, payload: dict) -> tuple[int, bytes, bytes, Any]:
         if self.closed or self._closing:
             raise AwError("task_closed")
         if self.fallback:
-            return 0, b"", b""
+            return 0, b"", b"", None
         result = await self.call(
             {
                 "method": "sdk_callback",
@@ -454,7 +475,7 @@ class Task:
             max(self.instance.timeout_ms, hook.get("budget_ms", 0) + 1000),
         )
         if result is None:
-            return 0, b"", b""
+            return 0, b"", b"", None
         if type(result.get("code")) is not int or result["code"] not in (0, 2):
             raise AwError("invalid_callback_response")
         outputs = []
@@ -467,10 +488,22 @@ class Task:
             ):
                 raise AwError("invalid_callback_response")
             outputs.append(bytes(value))
-        return result["code"], outputs[0], outputs[1]
+        return result["code"], outputs[0], outputs[1], result.get("directive")
 
-    async def emit(self, event: str, payload: dict) -> dict[str, str]:
-        """Emit at an installed boundary and return the decision for native adoption."""
+    async def _invoke_step(self, hook: dict, payload: dict) -> tuple[int, bytes, bytes]:
+        code, stdout, stderr, _ = await self._invoke_step_raw(hook, payload)
+        return code, stdout, stderr
+
+    async def _invoke_semantic(self, hook: dict, payload: dict) -> tuple[int, Any]:
+        try:
+            code, _, _, directive = await self._invoke_step_raw(hook, payload)
+            return code, directive
+        except BaseException:
+            await self.abort_event(hook, payload)
+            raise
+
+    async def emit(self, event: str, payload: dict) -> dict[str, Any]:
+        """Emit at an installed boundary; caller adopts block, rewrites and withholding."""
         if self.closed or self._closing:
             raise AwError("task_closed")
         if self.instance.capabilities.get("adapter") != "sdk":
@@ -479,18 +512,33 @@ class Task:
             raise AwError("semantic_event_unavailable")
         native = {**deepcopy(payload), "api_version": "aw-hook-source/v1", "event": event}
         hooks = [hook for hook in self.routes["hooks"] if hook["event"] == event]
+        updated_input: dict[str, Any] | None = None
+        replaced_result: Any = _UNSET
         for hook in hooks:
-            code, _, _ = await self.invoke_native(hook, native)
+            code, directive = await self._invoke_semantic(hook, native)
             if code == 2:
                 return {"decision": "block", "coverage": "checked"}
             if self.fallback:
                 break
-        return {
+            if directive is not None:
+                kind, value = _parse_sdk_directive(event, directive)
+                if kind == "withhold":
+                    return {"decision": "withhold", "coverage": "checked"}
+                if kind == "replace_input":
+                    updated_input = value
+                elif kind == "replace_result":
+                    replaced_result = value
+        reply: dict[str, Any] = {
             "decision": "continue",
             "coverage": (
                 "unavailable" if self.fallback else "checked" if hooks else "not_configured"
             ),
         }
+        if updated_input is not None:
+            reply["updated_input"] = updated_input
+        if replaced_result is not _UNSET:
+            reply["replaced_result"] = replaced_result
+        return reply
 
     async def close(self) -> None:
         if self.closed:

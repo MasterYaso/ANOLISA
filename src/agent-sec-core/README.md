@@ -6,7 +6,7 @@
 workloads: prompt injection detection, code scanning, PII detection, skill
 integrity tracking, sandbox isolation, and a local security event store.
 Security scanning runs locally with no Token cost; optional Intent proposals
-use a cloud model and may incur charges. Applicable to
+and Skill Score assessments use cloud models and may incur charges. Applicable to
 Agent OS platforms such as [ANOLISA](../../README.md) and to the six Agent hosts
 listed below.
 
@@ -64,6 +64,16 @@ As AI Agents gradually gain OS-level execution capabilities (file I/O, network a
 The V2 source build installs `agent-sec-daemon` as the host-level
 `agent-sec-core.service` systemd unit. The V2 migration retains the hook-facing
 CLI command and integration capability surface through Rust implementations.
+
+## Optional Skill safety assessment
+
+`agent-sec-cli skillsec score plan/run` provides native Rust planning and scoring. The base `sec-core` install stays lightweight; explicitly install the matching `sec-core-skill-score` component for Harbor execution. The optional source bundle contains no prebuilt images: explicit installation builds both images, records their identities, and obtains locked third-party dependencies. Single-machine Linux and SkillEval FC use the same CLI, worker and ASC network sidecar. Configure the shared model service with a secret reference; existing local scanner defaults remain unchanged. See the [installation, contract and validation guide](../../docs/user-guide/en/agent-sec-core/skill-score.md).
+
+The shared model configuration also accepts an explicitly selected `anthropic-compatible` proxy. ASC uses the proxy address and opaque credential for both scoring and Agent execution; identity attribution and metering remain with the calling platform and proxy. The existing Bailian configuration remains available.
+
+The runtime installer requires host Python 3.10 or newer. Activation and scoring require access to the local system Docker socket. To include business dependencies in the work image, set `ANOLISA_SKILL_SCORE_BASE_IMAGE` to the immutable base image reference and optionally set `ANOLISA_SKILL_SCORE_BASE_RECIPE` to its JSON recipe path. The build receipt records the selected base.
+
+Image builders without Docker can stage worker files with `ANOLISA_SKILL_SCORE_STAGE_ONLY=1` and embed an exported, release-bound image archive. After Docker starts, `agent-sec-cli skillsec score install-runtime` activates the preloaded runtime offline. See the guide for the raw/RPM preload directories and build-stage commands; default installation stays lightweight.
 
 ## V2 SkillSec and Policy CLI
 

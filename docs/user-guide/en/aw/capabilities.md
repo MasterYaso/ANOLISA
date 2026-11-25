@@ -13,10 +13,13 @@ Application-owned resident Claude and Pi workers can also publish an SDK attach 
 AW shares tool checks, result processing and custom rules across Agents. Adapters connect these capabilities to native tool execution. See the [Agent index](../../../developer-guide/en/aw/native-agents.md) for versions and setup.
 
 Use the `sdk/application` profile to install framework-free input, tool and lifecycle
-boundaries in Python or TypeScript. Select the lifecycle events when creating a
-`LanguageSource`, then call the corresponding `SourceSession` methods from the
-application's native boundaries. The application adopts the returned `turn.stop`
-decision before allowing the turn to end. [Runtime SDK integration](../../../developer-guide/en/aw/deployment/native-sdk.md#framework-free-integration)
+boundaries in Python or TypeScript, including opt-in `replace_input`,
+`replace_result` and `withhold_result` (strict streaming replacement or
+withholding requires bounded buffering). Select the lifecycle events when
+creating a `LanguageSource`, then call the corresponding `SourceSession` methods
+from the application's native boundaries. The application adopts the returned
+`turn.stop` decision before allowing the turn to end.
+[Runtime SDK integration](../../../developer-guide/en/aw/deployment/native-sdk.md#framework-free-integration)
 
 ## Hook support matrix
 
@@ -35,7 +38,7 @@ decision before allowing the turn to end. [Runtime SDK integration](../../../dev
 | `qoder` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | × | × |
 | `qoder-sdk` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | × | × |
 | `qwenpaw` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | × | × | ✓ | × |
-| `sdk` | ✓ | ✓ | × | ✓ | × | ✓ | ✓ | × | × | ✓ | ✓ | ✓ | ✓ |
+| `sdk` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | × | × | ✓ | ✓ | ✓ | ✓ |
 <!-- aw-regression-matrix:end -->
 `tool.before` can observe or block; `tool.after` can observe or replace results through a structured Provider. Boolean scripts and native commands cannot request result replacement.
 Configuration can [select steps by tool](configuration.md#select-tools-for-a-hook-step); native permissions and denial retain precedence.
@@ -261,7 +264,10 @@ cases record the unchecked execution boundary and confirm that an AW deny still
 prevents execution. These cases do not certify final-argument enforcement.
 
 The configuration-driven Qoder SDK bridge uses public native Hooks and cooperative
-PID attachment. Model inference starts without AW when input.submit is disabled;
-first-tool admission fixes its Scope. Supported checks are input/tool-before
-observation and blocking, and tool-after observation. Result replacement/final
-checks retain their managed entrypoints. See [SDK deployment](../../../developer-guide/en/aw/deployment/native-sdk.md#configuration-driven-qoder-integration).
+PID attachment. With `session.start` and `input.submit` disabled, model inference
+can begin before attachment and first-tool admission fixes the Scope.
+The `qoder-public-hooks` profile supports
+input and tool-before observation and blocking, plus tool-after observation and
+replacement of a supported `PostToolUse` text slot. `PostToolUseFailure` exposes
+error details for observation. Failure withholding and final-result checks use
+managed entrypoints. See [SDK deployment](../../../developer-guide/en/aw/deployment/native-sdk.md#configuration-driven-qoder-integration).

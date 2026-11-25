@@ -9,6 +9,8 @@ pub struct DeploymentProfile {
     pub capabilities: AdapterCapabilities,
     /// Whether the native integration requires AW even for optional policy steps.
     pub requires_service: bool,
+    /// Whether descriptors for this profile emit the optional `observe_session_start` hint.
+    pub session_start_hint: bool,
 }
 
 struct ProfileDefinition {
@@ -21,13 +23,12 @@ const PROFILES: &[ProfileDefinition] = &[
         name: "qoder-public-hooks",
         build: || {
             let mut capabilities = catalog::QODER_SDK.capabilities("public-hooks/v1", "sdk-worker");
-            capabilities
-                .events
-                .insert("tool.after".into(), vec!["observe".into()]);
+            capabilities.events.remove("session.end");
             observe_or_block_before(&mut capabilities);
             DeploymentProfile {
                 capabilities,
                 requires_service: false,
+                session_start_hint: true,
             }
         },
     },
@@ -43,6 +44,7 @@ const PROFILES: &[ProfileDefinition] = &[
             DeploymentProfile {
                 capabilities,
                 requires_service: true,
+                session_start_hint: false,
             }
         },
     },
@@ -53,6 +55,7 @@ const PROFILES: &[ProfileDefinition] = &[
         build: || DeploymentProfile {
             capabilities: catalog::CLAUDE_SDK.capabilities("resident-hooks/v1", "sdk-worker"),
             requires_service: true,
+            session_start_hint: false,
         },
     },
     ProfileDefinition {
@@ -67,10 +70,19 @@ const PROFILES: &[ProfileDefinition] = &[
             DeploymentProfile {
                 capabilities,
                 requires_service: true,
+                session_start_hint: false,
             }
         },
     },
 ];
+
+/// Returns whether any deployment profile for `adapter` requests the `observe_session_start` hint.
+pub fn emits_session_start_hint(adapter: &str) -> bool {
+    PROFILES.iter().any(|definition| {
+        let profile = (definition.build)();
+        profile.session_start_hint && profile.capabilities.adapter == adapter
+    })
+}
 
 /// These SDK bindings capture the public before boundary without input rewriting.
 fn observe_or_block_before(capabilities: &mut AdapterCapabilities) {
@@ -111,11 +123,19 @@ mod tests {
     fn sdk_profiles_preserve_their_native_effect_boundaries() {
         let qoder = profile("qoder-public-hooks", true).unwrap();
         assert!(!qoder.requires_service);
+        assert!(qoder.session_start_hint);
+        assert!(emits_session_start_hint("qoder-sdk"));
         assert_eq!(qoder.capabilities.version, "public-hooks/v1");
-        assert_eq!(qoder.capabilities.events["tool.after"], ["observe"]);
+        assert_eq!(
+            qoder.capabilities.events["tool.after"],
+            ["observe", "replace_result"]
+        );
+        assert!(!qoder.capabilities.events.contains_key("session.end"));
         assert!(qoder.capabilities.failure_actions.is_empty());
         let qwenpaw = profile("qwenpaw-installed-native-hooks", true).unwrap();
         assert!(qwenpaw.requires_service);
+        assert!(!qwenpaw.session_start_hint);
+        assert!(!emits_session_start_hint("qwenpaw"));
         assert_eq!(qwenpaw.capabilities.version, "installed-native-hooks/v1");
         assert_eq!(
             qwenpaw.capabilities.events["tool.after"],
@@ -156,6 +176,8 @@ mod tests {
         ] {
             let profile = profile(name, true).unwrap();
             assert!(profile.requires_service, "{name}");
+            assert!(!profile.session_start_hint, "{name}");
+            assert!(!emits_session_start_hint(adapter), "{adapter}");
             let capabilities = profile.capabilities;
             assert_eq!(
                 (

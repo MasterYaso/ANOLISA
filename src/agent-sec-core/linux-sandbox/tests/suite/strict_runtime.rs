@@ -2,6 +2,11 @@
 #![cfg(target_os = "linux")]
 
 use asc_sandbox_types::{BackendStatus, ExecutionSpec, PathFact};
+use linux_sandbox::path::AbsolutePathBuf;
+use linux_sandbox::policy::{
+    FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSandboxPolicy,
+    FileSystemSpecialPath,
+};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -11,6 +16,286 @@ use std::process::{Command, Output, Stdio};
 
 fn enabled() -> bool {
     std::env::var_os("ASC_SANDBOX_INTEGRATION").is_some()
+}
+
+fn run_json_policy(
+    work: &Path,
+    full_read: bool,
+    paths: &[(&Path, FileSystemAccessMode)],
+    shell: &str,
+) -> Output {
+    run_json_policy_with_launcher(work, full_read, paths, shell, |sandbox| {
+        Command::new(sandbox)
+    })
+}
+
+fn run_json_policy_with_launcher(
+    work: &Path,
+    full_read: bool,
+    paths: &[(&Path, FileSystemAccessMode)],
+    shell: &str,
+    launch: impl FnOnce(&Path) -> Command,
+) -> Output {
+    // The root suite cannot traverse the runner's checkout inside the user namespace.
+    let executable_dir = tempfile::tempdir().unwrap();
+    let sandbox = executable_dir.path().join("linux-sandbox");
+    // A separate process keeps the writable executable fd out of concurrent test forks.
+    let install = Command::new("install")
+        .args(["-m", "0755", "--", env!("CARGO_BIN_EXE_linux-sandbox")])
+        .arg(&sandbox)
+        .output()
+        .expect("start install for the test executable");
+    assert!(install.status.success(), "{install:?}");
+    let entry = |path: &Path, access| FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: AbsolutePathBuf::try_from(path).unwrap(),
+        },
+        access,
+    };
+    let mut entries = vec![
+        entry(work, FileSystemAccessMode::Write),
+        entry(&sandbox, FileSystemAccessMode::Read),
+    ];
+    entries.extend(paths.iter().map(|&(path, access)| entry(path, access)));
+    if full_read {
+        entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        });
+    }
+    let policy = serde_json::to_string(&FileSystemSandboxPolicy::restricted(entries)).unwrap();
+    launch(&sandbox)
+        .current_dir(work)
+        .arg("--sandbox-policy-cwd")
+        .arg(work)
+        .args([
+            "--file-system-sandbox-policy",
+            &policy,
+            "--network-sandbox-policy",
+            "\"restricted\"",
+            "--",
+            "/bin/sh",
+            "-c",
+            shell,
+        ])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn json_policy_rejects_missing_read_only_subpaths_without_creating_them() {
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let missing = work.path().join("missing");
+    for full_read in [false, true] {
+        let output = run_json_policy(
+            work.path(),
+            full_read,
+            &[(&missing, FileSystemAccessMode::Read)],
+            "printf started",
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(
+            stderr.contains("cannot resolve read-only subpath"),
+            "{stderr}"
+        );
+        assert_eq!(
+            missing.symlink_metadata().unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+}
+
+#[test]
+fn json_policy_enforces_canonical_read_through_direct_and_symlink_access() {
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let target = work.path().join("docs");
+    let nested_write = target.join("output");
+    let alias = work.path().join("alias");
+    std::fs::create_dir_all(&nested_write).unwrap();
+    std::fs::write(target.join("sample"), "original").unwrap();
+    std::os::unix::fs::symlink("docs", &alias).unwrap();
+
+    for full_read in [false, true] {
+        let output = run_json_policy(
+            work.path(),
+            full_read,
+            &[
+                (&target, FileSystemAccessMode::Read),
+                (&nested_write, FileSystemAccessMode::Write),
+            ],
+            "test \"$(cat docs/sample)\" = original && ! (printf updated >> docs/sample) && test \"$(cat alias/sample)\" = original && \
+             ! (printf updated >> alias/sample) && \
+             printf result > alias/output/result",
+        );
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("sample")).unwrap(),
+            "original"
+        );
+        assert_eq!(std::fs::read_link(&alias).unwrap(), Path::new("docs"));
+        assert_eq!(
+            std::fs::read_to_string(nested_write.join("result")).unwrap(),
+            "result"
+        );
+    }
+}
+
+#[test]
+fn json_policy_rejects_writable_symlinks_before_starting_the_command() {
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let stable = tempfile::tempdir().unwrap();
+    let alias = work.path().join("alias");
+    let indirect = stable.path().join("indirect");
+    std::fs::write(stable.path().join("sample"), "original").unwrap();
+    std::os::unix::fs::symlink(stable.path(), &alias).unwrap();
+    std::os::unix::fs::symlink(&alias, &indirect).unwrap();
+
+    for path in [&alias, &alias.join("sample"), &indirect.join("sample")] {
+        for (special_root, literal_root) in [(false, false), (true, false), (false, true)] {
+            let mut paths = vec![(path.as_path(), FileSystemAccessMode::Read)];
+            if literal_root {
+                paths.push((Path::new("/"), FileSystemAccessMode::Read));
+            }
+            let output = run_json_policy(work.path(), special_root, &paths, "printf started");
+            assert!(!output.status.success(), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!(
+                    "read-only subpath {} crosses writable symlink {}",
+                    path.display(),
+                    alias.display()
+                )),
+                "{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn json_policy_accepts_a_read_alias_outside_writable_roots() {
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let stable = data.path().join("stable");
+    let docs = work.path().join("docs");
+    std::fs::create_dir(&docs).unwrap();
+    std::fs::write(docs.join("sample"), "original").unwrap();
+    std::os::unix::fs::symlink(&docs, &stable).unwrap();
+    for full_read in [false, true] {
+        let output = run_json_policy(
+            work.path(),
+            full_read,
+            &[(&stable, FileSystemAccessMode::Read)],
+            &format!(
+                "test \"$(cat '{}/sample')\" = original && ! (printf updated >> docs/sample)",
+                stable.display()
+            ),
+        );
+        assert!(output.status.success(), "{output:?}");
+    }
+}
+
+#[test]
+fn json_policy_rejects_an_unrepresentable_read_only_mount_target() {
+    use std::os::unix::ffi::OsStrExt;
+
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let docs = work.path().join(std::ffi::OsStr::from_bytes(b"docs-\xff"));
+    let stable = data.path().join("stable");
+    std::fs::create_dir(&docs).unwrap();
+    std::os::unix::fs::symlink(&docs, &stable).unwrap();
+    let output = run_json_policy(
+        work.path(),
+        true,
+        &[(&stable, FileSystemAccessMode::Read)],
+        "printf started",
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("read-only mount target is not valid UTF-8"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn json_policy_keeps_existing_submounts_read_only() {
+    if !enabled() || unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let docs = work.path().join("docs");
+    let mounted = docs.join("mounted");
+    std::fs::create_dir_all(&mounted).unwrap();
+    let output = run_json_policy_with_launcher(
+        work.path(),
+        true,
+        &[(&docs, FileSystemAccessMode::Read)],
+        r#"test "$(cat docs/mounted/sample)" = original && ! (printf updated >> docs/mounted/sample)"#,
+        |sandbox| {
+            // The fixture mount disappears when the private mount namespace exits.
+            let mut cmd = Command::new("unshare");
+            cmd.args([
+                "--mount",
+                "--propagation",
+                "private",
+                "--",
+                "/bin/sh",
+                "-ec",
+                r#"mount -t tmpfs tmpfs "$1"; printf original > "$1/sample"; shift; exec "$@""#,
+                "sh",
+            ])
+            .arg(&mounted)
+            .arg(sandbox);
+            cmd
+        },
+    );
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn json_policy_reports_a_noncanonical_writable_root_with_a_read_only_descendant() {
+    if !enabled() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("workspace");
+    let read_only = root.join("docs");
+    let alias = work.path().join("alias");
+    std::fs::create_dir_all(&read_only).unwrap();
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+
+    let output = run_json_policy(
+        &alias,
+        true,
+        &[(&read_only, FileSystemAccessMode::Read)],
+        "printf started",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(stderr.contains("to use its canonical path"), "{stderr}");
 }
 
 fn fact(path: &Path) -> PathFact {
@@ -55,6 +340,8 @@ fn run_with(
             Stdio::piped(),
         ],
         extra_fds,
+        false,
+        Default::default(),
     )
 }
 
@@ -62,9 +349,15 @@ fn run_with_stdio(
     spec: &ExecutionSpec,
     [stdin, stdout, stderr]: [Stdio; 3],
     extra_fds: &[RawFd],
+    preflight: bool,
+    landlock: asc_sandbox_types::LandlockMode,
 ) -> (Output, Vec<BackendStatus>) {
     let mut input = tempfile::tempfile().unwrap();
-    serde_json::to_writer(&mut input, spec).unwrap();
+    serde_json::to_writer(
+        &mut input,
+        &asc_sandbox_types::LinuxExecutionSpec { spec, landlock },
+    )
+    .unwrap();
     input.flush().unwrap();
     input.seek(SeekFrom::Start(0)).unwrap();
     let mut fds = [0; 2];
@@ -74,6 +367,9 @@ fn run_with_stdio(
     let input_fd = input.as_raw_fd();
     let status_fd = writer.as_raw_fd();
     let mut command = Command::new(env!("CARGO_BIN_EXE_linux-sandbox"));
+    if preflight {
+        command.arg("--preflight-landlock");
+    }
     command.args([
         "--execution-spec-fd",
         &input_fd.to_string(),
@@ -137,6 +433,75 @@ fn collect_inner_profiles(spec: &ExecutionSpec, statuses: &[BackendStatus]) {
             "inner helper coverage profile was not collected"
         );
     }
+}
+
+#[test]
+fn landlock_probe_distinguishes_protocol_errors_from_kernel_support() {
+    let probe = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_linux-sandbox"))
+            .arg("--check-landlock")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for (args, diagnostic) in [
+        (&[][..], "expected --check-landlock MODE"),
+        (&["unknown"][..], "expected off, auto or required"),
+        (&["off", "extra"][..], "expected --check-landlock MODE"),
+    ] {
+        let reply = probe(args);
+        assert_eq!(reply.status.code(), Some(125));
+        assert!(reply.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&reply.stderr).contains(diagnostic));
+    }
+    assert_eq!(probe(&["off"]).stdout, b"landlock-write-v1\n");
+    if enabled() {
+        let reply = probe(&["auto"]);
+        assert!(reply.status.success(), "{reply:?}");
+        assert_eq!(reply.stdout, b"landlock-write-v1\n");
+    }
+    if std::env::var_os("ASC_LANDLOCK_INTEGRATION").is_some() {
+        let reply = probe(&["required"]);
+        assert!(reply.status.success(), "{reply:?}");
+        assert_eq!(reply.stdout, b"landlock-write-v1\n");
+    }
+}
+
+#[test]
+fn required_preflight_installs_the_rules_without_starting_the_target() {
+    if !enabled() || std::env::var_os("ASC_LANDLOCK_INTEGRATION").is_none() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let input = spec(work.path(), "echo started >> marker");
+    let mode = asc_sandbox_types::LandlockMode::Required;
+    let (output, statuses) = run_with_stdio(
+        &input,
+        [Stdio::null(), Stdio::piped(), Stdio::piped()],
+        &[],
+        true,
+        mode,
+    );
+    assert!(output.status.success(), "{output:?} {statuses:?}");
+    assert!(matches!(
+        statuses.as_slice(),
+        [BackendStatus::InstalledWithLandlock {
+            landlock: asc_sandbox_types::LandlockStatus::Enforced { abi: 3.. }
+        }]
+    ));
+    assert!(!work.path().join("marker").exists());
+    let (output, statuses) = run_with_stdio(
+        &input,
+        [Stdio::null(), Stdio::piped(), Stdio::piped()],
+        &[],
+        false,
+        mode,
+    );
+    assert!(output.status.success(), "{output:?} {statuses:?}");
+    assert_eq!(
+        std::fs::read_to_string(work.path().join("marker")).unwrap(),
+        "started\n"
+    );
 }
 
 #[test]
@@ -705,7 +1070,7 @@ fn strict_runtime_rejects_directory_on_every_standard_descriptor() {
         request.path_facts.push(fact(secret.path()));
         let mut stdio = [Stdio::null(), Stdio::piped(), Stdio::piped()];
         stdio[fd] = Stdio::from(File::open(secret.path()).unwrap());
-        let (output, statuses) = run_with_stdio(&request, stdio, &[]);
+        let (output, statuses) = run_with_stdio(&request, stdio, &[], false, Default::default());
         assert_eq!(output.status.code(), Some(125), "fd {fd}: {statuses:?}");
         assert!(
             matches!(statuses.as_slice(), [BackendStatus::Failed { message }] if message.contains("directory standard I/O")),

@@ -83,10 +83,16 @@ AW loss leaves native Queries, Hooks, tools and model execution running. Set
 still apply while AW is reachable. A conflicting required policy rejects bridge
 initialization. Choose `availability: "required"` explicitly when protected work
 must stop on AW loss. Availability is an SDK lifecycle option; policy remains in the file.
-The bridge supports input observation/blocking when configured, tool-before
-observation/blocking and tool-after observation. Unsupported policy effects or
-Skill routes fail admission; result replacement and final-result gates retain
-their existing managed entrypoints.
+The `qoder-public-hooks` profile supports configured input and tool-before
+observation and blocking, plus tool-after observation and `replace_result`.
+A replacement step uses `on_error: report` and runs last after the observation
+steps. All steps receive the original tool result. The adapter returns
+`hookSpecificOutput.updatedToolOutput` on `PostToolUse` for a supported text
+slot and preserves the rest of the tool result. `PostToolUseFailure` provides error details for observation
+and has no replacement slot. A Provider error is surfaced to the application
+and requests a native Query stop. This stop does not establish that Qoder
+withheld an unchecked result. For `withhold_result` or a final-result gate, use
+a verified managed entrypoint.
 
 After native application readiness, deployment prepares sec-core in the background
 and runs under the application user:
@@ -96,15 +102,19 @@ aw connect --config /absolute/aw.yaml --sdk-pid APPLICATION_PID --timeout-ms 100
 ```
 
 With `daemon.startup: on_demand`, this command starts or reuses AW. The PID must
-belong to the Node application running the installed bridge. Preparation can
-overlap model inference. Without `input.submit`, the bridge installs no
-`UserPromptSubmit` callback and creates no Scope before the first native tool.
-The first `PreToolUse` fixes the Task policy; required mode waits for attachment,
-while optional mode immediately fixes native fallback if AW is not Ready; internal
-before observation also correlates an after-only policy. Text-only replies do not
-wait. `attachTimeoutMs` defaults to 5000 ms: timeout denies a required tool. Optional mode does not wait for attachment. Once admitted, each Query
-retains one Scope and the existing loss/recovery semantics. Changing the file to
-add `input.submit` requires restarting the bridge before attachment.
+belong to the Node application running the installed bridge. The bridge installs
+`SessionStart` and `UserPromptSubmit` only for their respective enabled events.
+With both events disabled, model inference can overlap attachment and the first
+`PreToolUse` fixes the Task policy. Required admission waits up to
+`attachTimeoutMs` (5000 ms by default). Native fallback can proceed when AW is
+unavailable. An internal tool-before observation still correlates an
+after-only policy. Once admitted, each Query uses one Scope.
+
+Current `qoder-public-hooks` deployment descriptors include the optional
+`observe_session_start` hint when `session.start` is enabled; other profiles
+leave their descriptor fields unchanged. The bridge reads older descriptors
+with the hint absent as disabled. Regenerate the descriptor when enabling
+`session.start`, and restart the bridge when changing either startup event.
 
 `aw.query` accepts the original Query input and returns a proxy preserving native
 methods. Consumption completion, early iterator return and explicit `close()`
@@ -438,6 +448,70 @@ and `aw_sdk.sources`):
   `SourceSession` at a time (`source_already_instrumented`); create per-request
   object instances or wrap functions directly when serving concurrent sessions.
 
+### Rewrites and fault withholding (`replace_input`, `replace_result`, `withhold_result`)
+
+Opt in per `LanguageSource` to keep existing observe/block callers unchanged:
+
+- Pass `replaceInput: true`, `replaceResult: true`, and/or `withholdResult: true`
+  to `LanguageSource.create(...)` in TypeScript (or `replace_input=True`,
+  `replace_result=True`, `withhold_result=True` in Python). Route confirmation
+  rejects any policy step whose effect or `withhold_result` failure action was
+  not declared.
+- **`replace_input`**: When a `tool.before` Provider returns approved revised
+  arguments, `wrapTool` / `wrap_tool` rebuilds plain JSON dict/object arguments
+  safely (or calls optional `applyInput` / `apply_input` for custom argument
+  shapes) and re-verifies the projected input before native execution. Shapes
+  that cannot be rebuilt safely fail closed with `source_input_replace_unsupported`
+  rather than silently discarding the rewrite.
+- **`replace_result`, `withhold_result` and strict output isolation**: When
+  `tool.after` returns a replacement, `wrapTool` / `wrap_tool` replaces string
+  or plain structured text envelopes (or calls optional `applyResult` /
+  `apply_result`); unsupported shapes fail with `source_result_replace_unsupported`.
+  On strict-after routes (`replace_result` or `on_error: withhold_result`):
+  - Without `extractResult` / `extract_result`, the SDK only accepts strict
+    plain JSON values (in TypeScript, dense plain arrays with no extra named,
+    non-enumerable, symbol, or accessor properties, and plain objects with
+    enumerable string data properties; a top-level `undefined` return from a
+    non-streaming TypeScript tool is preserved as `undefined` on delivery while
+    projected as `null` in the audited `tool.after` payload, whereas `undefined`
+    inside objects/arrays or in stream chunks is rejected) and delivers a
+    detached copy of the **exact audited JSON value**. Opaque custom types,
+    sparse arrays, arrays with extra properties, and unbuffered lazy
+    iterators/generators fail closed (`source_result_isolation_required` or
+    `source_stream_withhold_requires_buffering`).
+  - With `extractResult` / `extract_result`, AW evaluates the extractor once
+    on an isolated copy and audits the normalized JSON projection it returns.
+    On non-streaming strict routes, opaque non-JSON objects still fail closed
+    unless the caller also provides `snapshotResult` / `snapshot_result` to
+    detach the native value; in that case AW audits the extracted projection
+    rather than opaque native fields.
+  - When a required `tool.after` check fails under `on_error: withhold_result`,
+    the SDK raises `SourceResultWithheld` (`toolExecuted` / `tool_executed = true`)
+    and never returns unchecked output. Under `on_error: report`, audited
+    recoverable Provider faults on `tool.after` are recorded and allow the
+    checked original result through, while Scope/RPC/cancellation/audit faults
+    remain fail-closed.
+- **Honest streaming boundary and unified byte budget**: Unbuffered streaming
+  tools cannot recall chunks already yielded to callers. When `tool.after`
+  admits `replace_result` or `on_error: withhold_result`, an unbuffered stream
+  (async generator or sync generator/iterator) fails before starting the native
+  generator with `source_stream_withhold_requires_buffering`. Set
+  `bufferStream: true` / `buffer_stream=True` to buffer isolated strict plain
+  JSON chunk snapshots up to both `maxStreamItems` / `max_stream_items` and
+  `maxStreamBytes` / `max_stream_bytes` (default `1048576` bytes). This byte
+  budget applies only to buffered streams (ordinary non-streaming tool results
+  do not use `maxStreamBytes` / `max_stream_bytes`) and is metered in compact
+  UTF-8 JSON (`JSON.stringify` in TypeScript; `separators=(",", ":")`,
+  `ensure_ascii=False` in Python; wire RPC framing may be larger when ASCII
+  escapes are used). Strict stream buffering rejects unmeterably opaque custom
+  types (`source_result_isolation_required`) even when `extractResult` /
+  `extract_result` or `snapshotResult` / `snapshot_result` is configured, and
+  enforces `maxStreamBytes` / `max_stream_bytes` on both the buffered chunk
+  snapshot array (including `[]` at 2 bytes for an empty stream) and the
+  single-evaluated audited `tool.after` payload (including after
+  `extractResult` / `extract_result`). Overflow or withholding closes the
+  underlying iterator and yields zero chunks.
+
 See the [TypeScript Source example](../../../../../src/aw/sdk/typescript/examples/language-source.mjs)
 and [Python Source example](../../../../../src/aw/sdk/python/examples/language_source.py).
 
@@ -490,13 +564,18 @@ permissions, setting sources and Hooks. Pass its existing options to
 the Query before closing the task. Close the Instance when the application exits.
 Do not combine this integration with the existing AW Query factory on one Query.
 
-Construct `Instance` with an explicit endpoint, target, capabilities and
-availability. `cwd` and `environment` default to the application values and form
-the task context; pass the native Query directory and copied environment to
-`instance.task({cwd, environment})` when they differ. `install(routes)` must return `true`
-only when the application has installed a router for those events. It runs on
-registration and each task's policy snapshot before Ready acknowledgement.
-The example routes all Queries through `qoderOptions` and rejects unknown events.
+Construct `Instance` with an explicit endpoint, target and availability.
+`@anolisa/aw-sdk-qoder` exports `qoderProfile` for descriptor loading,
+`qoderCapabilities(inputEnabled, sessionStartEnabled)` for registration and
+`qoderInstallRoutes(routes, inputEnabled, sessionStartEnabled)` to validate the negotiated routes in
+`install(routes)`. For a WarmQuery, create an `Admission` for each entry, pass it
+and the native options to `qoderOptions` before startup, and bind the Query when
+that entry is consumed. Use the same configured startup flags when wiring callbacks
+and registering capabilities. The `install(routes)` callback runs on registration
+and again for each task's policy snapshot. Confirm only routes that the
+application wires. `cwd` and `environment` default to the application values.
+Pass the native Query directory and copied environment in the task or Admission
+options when they differ.
 Ready records the application's installation acknowledgement; it does not prove
 that each future Query has installed Hooks or adopted returned effects.
 
@@ -584,23 +663,26 @@ registration; general `aw service status` also reports SDK readiness and owner.
 
 ## Verified coverage
 
-The initial Qoder integration uses public `UserPromptSubmit`, `PreToolUse`,
-`PostToolUse` and `PostToolUseFailure` callbacks and canonical Adapter effect
-handling. Existing Hook groups are preserved and AW callbacks are appended. The Worker may
-schedule groups concurrently. AW evaluates its callback snapshot; native Hooks
-that later rewrite arguments are outside this integration's final-input guarantee.
+The Qoder integration uses public `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse` and `PostToolUseFailure` callbacks. It preserves existing Hook
+groups and appends AW callbacks. The Worker may schedule groups concurrently,
+so native observers can still see the original result. Verify the combination
+if another Hook also returns an output replacement. AW evaluates its callback
+snapshot. Later native rewrites fall outside this Hook's coverage.
 SDK 1.0.56 / Worker 1.1.78 acceptance covers real Bash execution, native Hook
 coexistence, AW loss during a Query, recovery for a new task and exactly-once
-side effects, plus AW and native denials with no tool side effect. The package does not import Qoder at its root or access private
-binding files. Other framework versions negotiate their declared capabilities;
+side effects, plus AW and native denials with no tool side effect. The same SDK
+and Worker versions adopt a replaced Bash result in the WarmQuery tool event and
+the next model turn while an existing native Post Hook sees the original output.
+The package does not import Qoder at its root or access private binding files. Other framework versions negotiate their declared capabilities;
 native acceptance remains version-specific.
 
 The resident `aw run` path retains its broader managed MCP, credential and
 pinned Worker integration. This public-Hook SDK does not yet provide those
 additional managed seams. Keep native MCP configuration in the application's
 options. Skill checks use the canonical Adapter resolver and require its native
-query interfaces. Input/result rewriting and Skill/MCP combinations require
-their own native acceptance before business rollout.
+query interfaces. Input rewriting and Skill/MCP combinations require their own native acceptance
+before business rollout.
 
 See the [SDK protocol](../../../../../src/aw/docs/design/en/runtime/native-sdk.md)
 for ownership and wire contracts and the

@@ -38,6 +38,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_omarchy:
+        description: 'Force run Omarchy integration tests'
+        required: false
+        type: boolean
+        default: false
       run_anolisa:
         description: 'Force run anolisa tests (ignore change detection)'
         required: false
@@ -86,6 +91,7 @@ jobs:
       ws_ckpt: ${{ steps.changes.outputs.ws_ckpt }}
       agent_memory: ${{ steps.changes.outputs.agent_memory }}
       anolisa: ${{ steps.changes.outputs.anolisa }}
+      omarchy: ${{ steps.changes.outputs.omarchy }}
       skillfs: ${{ steps.changes.outputs.skillfs }}
       cosh_ng: ${{ steps.changes.outputs.cosh_ng }}
       ktuner: ${{ steps.changes.outputs.ktuner }}
@@ -135,6 +141,7 @@ jobs:
           WS_CKPT=false
           AGENT_MEMORY=false
           ANOLISA=false
+          OMARCHY=false
           SKILLFS=false
           COSH_NG=false
           KTUNER=false
@@ -161,6 +168,15 @@ jobs:
           fi
           if echo "$CHANGED" | grep -q "^src/agent-memory/"; then
             AGENT_MEMORY=true
+          fi
+          if echo "$CHANGED" | grep -q "^distribution/omarchy/"; then
+            OMARCHY=true
+          fi
+          if echo "$CHANGED" | grep -Eq '^docs/user-guide/(en|zh)/omarchy/'; then
+            OMARCHY=true
+          fi
+          if echo "$CHANGED" | grep -Eq '^\.github/actions/build-omarchy-prebuilt/|^\.github/actions/prebuilt-rust-common/|^\.github/workflows/release(-preview)?\.yaml$'; then
+            OMARCHY=true
           fi
           if echo "$CHANGED" | grep -q "^distribution/anolisa/"; then
             ANOLISA=true
@@ -225,6 +241,10 @@ jobs:
           echo "tokenless=$TOKENLESS" >> $GITHUB_OUTPUT
           echo "ws_ckpt=$WS_CKPT" >> $GITHUB_OUTPUT
           echo "agent_memory=$AGENT_MEMORY" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.run_omarchy }}" == "true" ]]; then
+            OMARCHY=true
+          fi
+          echo "omarchy=$OMARCHY" >> $GITHUB_OUTPUT
           echo "anolisa=$ANOLISA" >> $GITHUB_OUTPUT
           echo "skillfs=$SKILLFS" >> $GITHUB_OUTPUT
           echo "cosh_ng=$COSH_NG" >> $GITHUB_OUTPUT
@@ -473,12 +493,12 @@ jobs:
         run: |
           cd src/agent-sec-core
           if [ -f coverage.xml ]; then
-            LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' coverage.xml | head -1)
-            BRANCH_RATE=$(grep -oP 'branch-rate="\K[^"]+' coverage.xml | head -1)
-            LINES_VALID=$(grep -oP 'lines-valid="\K[^"]+' coverage.xml | head -1)
-            LINES_COVERED=$(grep -oP 'lines-covered="\K[^"]+' coverage.xml | head -1)
-            BRANCHES_VALID=$(grep -oP 'branches-valid="\K[^"]+' coverage.xml | head -1)
-            BRANCHES_COVERED=$(grep -oP 'branches-covered="\K[^"]+' coverage.xml | head -1)
+            LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' coverage.xml | sed -n '1p')
+            BRANCH_RATE=$(grep -oP 'branch-rate="\K[^"]+' coverage.xml | sed -n '1p')
+            LINES_VALID=$(grep -oP 'lines-valid="\K[^"]+' coverage.xml | sed -n '1p')
+            LINES_COVERED=$(grep -oP 'lines-covered="\K[^"]+' coverage.xml | sed -n '1p')
+            BRANCHES_VALID=$(grep -oP 'branches-valid="\K[^"]+' coverage.xml | sed -n '1p')
+            BRANCHES_COVERED=$(grep -oP 'branches-covered="\K[^"]+' coverage.xml | sed -n '1p')
             LINE_PCT=$(echo "$LINE_RATE * 100" | bc -l | xargs printf '%.1f')
             BRANCH_PCT=$(echo "$BRANCH_RATE * 100" | bc -l | xargs printf '%.1f')
             {
@@ -542,12 +562,12 @@ jobs:
         run: |
           COV_FILE="src/agent-sec-core/openclaw-plugin/coverage/cobertura-coverage.xml"
           if [ -f "$COV_FILE" ]; then
-            LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' "$COV_FILE" | head -1)
-            BRANCH_RATE=$(grep -oP 'branch-rate="\K[^"]+' "$COV_FILE" | head -1)
-            LINES_VALID=$(grep -oP 'lines-valid="\K[^"]+' "$COV_FILE" | head -1)
-            LINES_COVERED=$(grep -oP 'lines-covered="\K[^"]+' "$COV_FILE" | head -1)
-            BRANCHES_VALID=$(grep -oP 'branches-valid="\K[^"]+' "$COV_FILE" | head -1)
-            BRANCHES_COVERED=$(grep -oP 'branches-covered="\K[^"]+' "$COV_FILE" | head -1)
+            LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' "$COV_FILE" | sed -n '1p')
+            BRANCH_RATE=$(grep -oP 'branch-rate="\K[^"]+' "$COV_FILE" | sed -n '1p')
+            LINES_VALID=$(grep -oP 'lines-valid="\K[^"]+' "$COV_FILE" | sed -n '1p')
+            LINES_COVERED=$(grep -oP 'lines-covered="\K[^"]+' "$COV_FILE" | sed -n '1p')
+            BRANCHES_VALID=$(grep -oP 'branches-valid="\K[^"]+' "$COV_FILE" | sed -n '1p')
+            BRANCHES_COVERED=$(grep -oP 'branches-covered="\K[^"]+' "$COV_FILE" | sed -n '1p')
             LINE_PCT=$(echo "$LINE_RATE * 100" | bc -l | xargs printf '%.1f')
             BRANCH_PCT=$(echo "$BRANCH_RATE * 100" | bc -l | xargs printf '%.1f')
             {
@@ -881,9 +901,13 @@ jobs:
           ASC_SANDBOX_INTEGRATION: '1'
         run: |
           test "$(id -u)" -ne 0
+          # The Ubuntu 24.04 VM supports ABI 3 when Landlock is active.
+          if sudo grep -qw landlock /sys/kernel/security/lsm; then
+            export ASC_LANDLOCK_INTEGRATION=1
+          fi
           cargo llvm-cov clean --workspace
           RUSTFLAGS="-C target-feature=+crt-static" cargo llvm-cov --locked --no-fail-fast --no-report --target x86_64-unknown-linux-gnu -- --skip bwrap_seccomp
-          sudo env ASC_SANDBOX_INTEGRATION=1 LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/root-%p-%m.profraw" "$(find target/llvm-cov-target/x86_64-unknown-linux-gnu/debug/deps -maxdepth 1 -type f -executable -name 'all-*' | head -1)" suite::strict_runtime:: --nocapture
+          sudo --preserve-env=ASC_LANDLOCK_INTEGRATION env ASC_SANDBOX_INTEGRATION=1 LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/root-%p-%m.profraw" "$(find target/llvm-cov-target/x86_64-unknown-linux-gnu/debug/deps -maxdepth 1 -type f -executable -name 'all-*' | head -1)" suite::strict_runtime:: --nocapture
           sudo chown "$(id -u):$(id -g)" target/llvm-cov-target/*.profraw
           cargo llvm-cov report --target x86_64-unknown-linux-gnu --cobertura --output-path ../rust-sandbox-coverage.xml
       - name: Build and verify the static sandbox helper
@@ -1489,12 +1513,18 @@ jobs:
   # =========================================================================
   # Step 8: Test tokenless
   # =========================================================================
-  test-tokenless:
-    name: Test tokenless
+  test-tokenless-rust:
+    name: Test tokenless (Rust & benchmarks)
     needs: detect-changes
     if: needs.detect-changes.outputs.tokenless == 'true'
     runs-on: anolisa-k8s-general-ci-x64
     environment: ${{ needs.detect-changes.outputs.cache_environment }}
+    timeout-minutes: 20
+    env:
+      # Disable Fat LTO and codegen-units=1 in PR CI while preserving Cargo.toml
+      # release profiles for release/preview/prebuilt workflows.
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
     steps:
       - uses: actions/checkout@v4
 
@@ -1510,13 +1540,17 @@ jobs:
         with:
           writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo registry downloads
+        uses: actions/cache@v4
         with:
-          cache-bin: false
-          workspaces: |
-            src/tokenless
-            src/tokenless/benchmark/l1-compressor
-            src/tokenless/benchmark/l2-module
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: tokenless-cargo-registry-rust-v1-${{ hashFiles('src/tokenless/Cargo.lock', 'src/tokenless/benchmark/l1-compressor/Cargo.lock', 'src/tokenless/benchmark/l2-module/Cargo.lock') }}
+          restore-keys: |
+            tokenless-cargo-registry-rust-v1-
+            tokenless-cargo-registry-integration-v1-
 
       # RTK is a path dependency of the workspace, so every cargo command below
       # needs the pinned, patched checkout. The cache keeps its mtimes, which
@@ -1541,9 +1575,7 @@ jobs:
           cargo clippy --workspace -- -D warnings
 
       - name: Run tests
-        run: |
-          cd src/tokenless
-          cargo test --workspace -- --test-threads=1
+        run: make -C src/tokenless test-tokenless
 
       # The benchmark suite is split into two standalone workspaces (each with an
       # empty [workspace] table in its Cargo.toml), so the --workspace commands
@@ -1588,48 +1620,69 @@ jobs:
           cd src/tokenless/benchmark/l2-module
           cargo test --release --locked
 
+  test-tokenless-integration:
+    name: Test tokenless (hooks, adapters & npm)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.tokenless == 'true'
+    runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
+    timeout-minutes: 20
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.91.0'
+
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
+      - name: Cache Cargo registry downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: tokenless-cargo-registry-integration-v1-${{ hashFiles('src/tokenless/Cargo.lock') }}
+          restore-keys: |
+            tokenless-cargo-registry-integration-v1-
+
+      - name: Cache pinned RTK source
+        uses: actions/cache@v4
+        with:
+          path: src/tokenless/third_party/rtk
+          key: tokenless-rtk-source-v1-${{ hashFiles('src/tokenless/packaging/build/setup-rtk.sh', 'src/tokenless/third_party/patches/*.patch') }}
+
+      - name: Set up pinned RTK source
+        run: bash src/tokenless/packaging/build/setup-rtk.sh
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Run Python integration tests
-        run: |
-          make -C src/tokenless test-integration
-
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          prune-cache: false
-          cache-dependency-glob: |
-            src/tokenless/python/tokenless/pyproject.toml
-            src/tokenless/python/agentscope/pyproject.toml.in
-            src/tokenless/tests/test-agentscope-integration.sh
-            src/tokenless/Makefile
-
       - uses: extractions/setup-just@v2
-
-      - name: Test bundled RTK integration
-        run: make -C src/tokenless test-rtk-integration
-
-      - name: Test L4 benchmark offline regressions
-        run: |
-          uv venv --python 3.12 "$RUNNER_TEMP/l4-benchmark-venv"
-          uv pip install --python "$RUNNER_TEMP/l4-benchmark-venv/bin/python" pytest pydantic tiktoken
-          make -C src/tokenless test-benchmark-l4 L4_TEST_PYTHON="$RUNNER_TEMP/l4-benchmark-venv/bin/python"
-
-      - name: Build and test Tokenless Python packages
-        run: |
-          make -C src/tokenless \
-            test-python-runtime test-agentscope-integration
-
-      - name: Remove local wheels from UV dependency cache
-        run: uv cache clean anolisa-tokenless anolisa-tokenless-agentscope
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: src/tokenless/adapters/tokenless/openclaw/package-lock.json
+
+      - name: Build debug CLI for integration tests
+        run: cargo build --locked --manifest-path src/tokenless/Cargo.toml -p tokenless-cli
+
+      - name: Run Python integration tests
+        run: make -C src/tokenless -j4 test-integration
+
+      - name: Test bundled RTK integration
+        run: make -C src/tokenless test-rtk-integration
 
       # Adapter lifecycle tests (install / detect / uninstall for openclaw,
       # dsh, qoder, opencode and qwenpaw) sit behind `make test-adapters`,
@@ -1638,8 +1691,7 @@ jobs:
       # plus two `node --test` suites) and python3 (installer probes), both
       # already set up above.
       - name: Test adapter installers
-        run: |
-          make -C src/tokenless test-adapters
+        run: make -C src/tokenless test-adapters
 
       - name: npm packaging smoke test (native Linux)
         run: |
@@ -1663,6 +1715,102 @@ jobs:
           test -f ./node_modules/anolisa-tokenless/adapters/tokenless/openclaw/dist/index.js
           # Verify adapter install scripts are executable
           test -x ./node_modules/anolisa-tokenless/adapters/tokenless/openclaw/scripts/install.sh
+
+  test-tokenless-python:
+    name: Test tokenless (Python packages & L4)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.tokenless == 'true'
+    runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
+    timeout-minutes: 20
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
+      CARGO_PROFILE_PYTHON_RELEASE_LTO: 'false'
+      CARGO_PROFILE_PYTHON_RELEASE_CODEGEN_UNITS: '16'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.91.0'
+
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
+      - name: Cache Cargo registry downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: tokenless-cargo-registry-python-v1-${{ hashFiles('src/tokenless/Cargo.lock') }}
+          restore-keys: |
+            tokenless-cargo-registry-python-v1-
+            tokenless-cargo-registry-integration-v1-
+
+      - name: Cache pinned RTK source
+        uses: actions/cache@v4
+        with:
+          path: src/tokenless/third_party/rtk
+          key: tokenless-rtk-source-v1-${{ hashFiles('src/tokenless/packaging/build/setup-rtk.sh', 'src/tokenless/third_party/patches/*.patch') }}
+
+      - name: Set up pinned RTK source
+        run: bash src/tokenless/packaging/build/setup-rtk.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          prune-cache: false
+          cache-dependency-glob: |
+            src/tokenless/python/tokenless/pyproject.toml
+            src/tokenless/python/agentscope/pyproject.toml.in
+            src/tokenless/tests/test-agentscope-integration.sh
+
+      - uses: extractions/setup-just@v2
+
+      - name: Test L4 benchmark offline regressions
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/l4-benchmark-venv"
+          uv pip install --python "$RUNNER_TEMP/l4-benchmark-venv/bin/python" pytest pydantic tiktoken
+          make -C src/tokenless test-benchmark-l4 L4_TEST_PYTHON="$RUNNER_TEMP/l4-benchmark-venv/bin/python"
+
+      - name: Build and test Tokenless Python packages
+        run: |
+          make -C src/tokenless \
+            test-python-runtime test-agentscope-integration
+
+      - name: Remove local wheels from UV dependency cache
+        run: uv cache clean anolisa-tokenless anolisa-tokenless-agentscope
+
+  test-tokenless:
+    name: Test tokenless
+    needs:
+      - detect-changes
+      - test-tokenless-rust
+      - test-tokenless-integration
+      - test-tokenless-python
+    if: ${{ always() && needs.detect-changes.outputs.tokenless == 'true' }}
+    runs-on: anolisa-k8s-general-ci-x64
+    timeout-minutes: 15
+    steps:
+      - name: Require all tokenless test jobs
+        env:
+          RUST_RESULT: ${{ needs.test-tokenless-rust.result }}
+          INTEGRATION_RESULT: ${{ needs.test-tokenless-integration.result }}
+          PYTHON_RESULT: ${{ needs.test-tokenless-python.result }}
+        run: |
+          test "$RUST_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+          test "$PYTHON_RESULT" = success
 
   # =========================================================================
   # Step 9: Test ws-ckpt
@@ -2213,3 +2361,39 @@ jobs:
         run: |
           cd src/ktuner
           cargo test
+
+  test-omarchy:
+    name: Test Omarchy integration
+    needs: detect-changes
+    if: needs.detect-changes.outputs.omarchy == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.6'
+      - name: Install test dependencies
+        run: python -m pip install -r distribution/omarchy/tests/requirements.txt
+      - name: Install offscreen Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libopengl0 libxkbcommon0
+      - name: Check Python formatting and lint
+        run: |
+          python -m ruff check distribution/omarchy
+          python -m ruff format --check distribution/omarchy
+      - name: Run integration and release failure tests
+        run: python -m pytest distribution/omarchy/tests -q
+      - name: Test the real QML view
+        run: python distribution/omarchy/tests/run_qml.py
+      - name: Render the panel and check actions and metrics
+        run: python distribution/omarchy/tests/check_panel.py --output "$RUNNER_TEMP/omarchy-panel-proof"
+      - name: Keep offscreen panel evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: omarchy-panel-proof
+          path: ${{ runner.temp }}/omarchy-panel-proof
+          retention-days: 14
+          if-no-files-found: error

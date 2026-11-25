@@ -100,7 +100,7 @@ fn descriptor_binds_exact_configuration_and_selects_native_waiting() {
             let capabilities = aw_adapter::deployment::profile(profile, input).unwrap();
             let descriptor =
                 aw_core::descriptor::DeploymentDescriptor::parse(&output.stdout).unwrap();
-            aw_core::descriptor::verify(
+            aw_core::descriptor::verify_with_options(
                 &descriptor,
                 &bytes,
                 "business",
@@ -109,6 +109,9 @@ fn descriptor_binds_exact_configuration_and_selects_native_waiting() {
                     aw_core::descriptor::Availability::Required
                 } else {
                     aw_core::descriptor::Availability::NativeFallback
+                },
+                aw_core::descriptor::CompileOptions {
+                    session_start_hint: capabilities.session_start_hint,
                 },
             )
             .unwrap();
@@ -152,6 +155,41 @@ fn descriptor_availability_uses_target_requirements_and_profile_minimum() {
             );
         }
     }
+    assert!(!directory.path().join("state").exists());
+}
+
+#[test]
+fn qoder_public_descriptor_admits_replacement_with_report_in_both_availability_modes() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut document = configuration(directory.path(), "qoder-sdk");
+    document["spec"]["providers"]["policy"] = json!({
+        "protocol":"aw-provider/v1alpha1","config":{},
+        "transport":{"type":"stdio","location":"agent","argv":["/absent/provider"]},
+        "timeout_ms":1000,"max_output_bytes":4096
+    });
+    document["spec"]["events"]["tool.after"] = json!({
+        "enabled":true,"required":false,"steps":[{
+            "id":"replace","provider":"policy","operation":"scan",
+            "effects":["observe","replace_result"],"on_error":"report"
+        }]
+    });
+    for (required, availability) in [(false, "native_fallback"), (true, "required")] {
+        document["spec"]["events"]["tool.after"]["required"] = json!(required);
+        let output = invoke(directory.path(), &document, "qoder-public-hooks");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["availability"], availability);
+    }
+    document["spec"]["events"]["tool.after"]["steps"][0]["on_error"] = json!("withhold_result");
+    let output = invoke(directory.path(), &document, "qoder-public-hooks");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failure action"));
     assert!(!directory.path().join("state").exists());
 }
 
@@ -279,4 +317,87 @@ fn show_selects_only_one_matching_target_without_disclosing_configuration() {
         .success());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
     assert!(!show(&["--sdk-target", "qoder-sdk"]).status.success());
+}
+
+#[test]
+fn session_start_hint_is_scoped_to_qoder_public_hooks() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let base_fields = [
+        "availability",
+        "configuration_sha256",
+        "endpoint",
+        "profile",
+        "target",
+        "version",
+        "wait_for_input_submit",
+    ];
+    for (adapter, profile, expects_hint) in [
+        ("qoder-sdk", "qoder-public-hooks", true),
+        ("claude-sdk", "claude-resident-hooks", false),
+        ("pi", "pi-worker-hooks", false),
+    ] {
+        let mut document = configuration(directory.path(), adapter);
+        document["spec"]["events"]["session.start"] =
+            json!({"enabled": true, "required": false, "steps": []});
+        let output = invoke(directory.path(), &document, profile);
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        if expects_hint {
+            assert_eq!(value["observe_session_start"], json!(true));
+        } else {
+            assert!(
+                value.get("observe_session_start").is_none(),
+                "{profile} unexpectedly emitted observe_session_start"
+            );
+            assert_eq!(keys, base_fields);
+        }
+        let bytes = fs::read(directory.path().join("aw.json")).unwrap();
+        let capabilities = aw_adapter::deployment::profile(profile, false).unwrap();
+        let descriptor = aw_core::descriptor::DeploymentDescriptor::parse(&output.stdout).unwrap();
+        aw_core::descriptor::verify_with_options(
+            &descriptor,
+            &bytes,
+            "business",
+            capabilities.capabilities,
+            if capabilities.requires_service {
+                aw_core::descriptor::Availability::Required
+            } else {
+                aw_core::descriptor::Availability::NativeFallback
+            },
+            aw_core::descriptor::CompileOptions {
+                session_start_hint: capabilities.session_start_hint,
+            },
+        )
+        .unwrap();
+
+        let show = Command::new(env!("CARGO_BIN_EXE_aw"))
+            .args(["config", "show", "--config"])
+            .arg(directory.path().join("aw.json"))
+            .args(["--sdk-target", adapter])
+            .output()
+            .unwrap();
+        assert!(
+            show.status.success(),
+            "{adapter}: {}",
+            String::from_utf8_lossy(&show.stderr)
+        );
+        let shown: Value = serde_json::from_slice(&show.stdout).unwrap();
+        assert_eq!(
+            shown.get("observe_session_start") == Some(&json!(true)),
+            expects_hint
+        );
+    }
+    assert!(!directory.path().join("state").exists());
 }
